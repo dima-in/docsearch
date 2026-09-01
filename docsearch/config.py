@@ -30,6 +30,9 @@ class Config:
         return self.max_file_mb * 1024 * 1024
 
 
+BACKSLASH = chr(92)
+
+
 def load(path: str | os.PathLike | None = None) -> Config:
     cfg_path = Path(path) if path else DEFAULT_CONFIG
     with open(cfg_path, encoding="utf-8") as fh:
@@ -38,7 +41,13 @@ def load(path: str | os.PathLike | None = None) -> Config:
     base = cfg_path.resolve().parent
 
     def resolve(value: str) -> str:
-        path = Path(value)
+        text = str(value).strip()
+        # из адресной строки проводника путь копируется с обратными
+        # слэшами: \\server\share. Приводим к прямым, иначе Path не
+        # опознаёт UNC и такой путь молча приклеится к папке проекта
+        if text.startswith("//") or text.startswith(BACKSLASH * 2):
+            return str(Path(text.replace(BACKSLASH, "/")))
+        path = Path(text)
         return str(path if path.is_absolute() else (base / path).resolve())
 
     roots = [Root(label=r.get("label") or r["path"], path=resolve(r["path"]))
