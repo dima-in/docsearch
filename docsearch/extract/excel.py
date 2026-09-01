@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 from . import Extracted
@@ -10,7 +11,11 @@ MAX_CELLS_PER_SHEET = 50_000
 def extract_xlsx(path: Path) -> Extracted:
     import openpyxl
 
-    wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+    # openpyxl предупреждает о колонтитулах, которые не смог разобрать.
+    # На содержимое ячеек это не влияет, а консоль засоряет
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
     try:
         parts: list[str] = []
         for sheet in wb.worksheets:
