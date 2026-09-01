@@ -133,7 +133,7 @@ def cmd_index(args) -> int:
               f"без изменений {st.skipped}", end="\r", flush=True)
 
     try:
-        stats = run_index(conn, cfg, progress=progress)
+        stats = run_index(conn, cfg, progress=progress, force=args.force)
     except FileNotFoundError as exc:
         print(f"\nНеуспех: {exc}")
         return 1
@@ -310,6 +310,9 @@ def cmd_ocr(args) -> int:
         return 1
 
     conn = db.connect(cfg.db)
+    if getattr(args, "retry_failed", False):
+        returned = db.reset_failed_ocr(conn)
+        print(f"Возвращено в очередь после неудачи: {returned}")
     todo = db.docs_for_ocr(conn, limit=args.limit)
     before = db.ocr_progress(conn)
     if not todo:
@@ -368,6 +371,48 @@ def cmd_ocr(args) -> int:
     return 0 if done else 1
 
 
+# ----------------------------------------------------------------------- text
+
+def cmd_text(args) -> int:
+    """Показать текст документа так, как его видит поиск."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+
+    if args.id:
+        doc_id = args.id
+    else:
+        hits = search_mod.search(conn, args.query, limit=1)
+        if not hits:
+            print(f"Неуспех: по запросу «{args.query}» ничего не найдено")
+            conn.close()
+            return 1
+        doc_id = hits[0]["id"]
+
+    doc = db.card(conn, doc_id)
+    if not doc:
+        print(f"Неуспех: документа с номером {doc_id} нет в индексе")
+        conn.close()
+        return 1
+
+    text = db.body(conn, doc_id)
+    print(f"{doc['name']}  (id {doc_id})")
+    print(f"{doc['root']} / {doc['rel_path']}")
+    attrs = [doc.get("doc_type"), doc.get("doc_number"), doc.get("doc_date"),
+             doc.get("counterparty"), doc.get("object_code")]
+    shown = " · ".join(a for a in attrs if a)
+    if shown:
+        print(shown)
+    source = "распознан OCR" if doc.get("ocr_status") == "done" else "текстовый слой"
+    print(f"{source}, символов {len(text)}")
+    print("-" * 70)
+    print(text[: args.chars] if text else "(текста нет)")
+    if len(text) > args.chars:
+        print(f"... ещё {len(text) - args.chars} символов")
+    conn.close()
+    return 0
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
@@ -385,6 +430,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_survey)
 
     s = sub.add_parser("index", help="построить или обновить индекс")
+    s.add_argument("--force", action="store_true",
+                   help="разобрать заново всё, а не только изменившееся")
     s.set_defaults(func=cmd_index)
 
     s = sub.add_parser("search", help="искать по индексу")
@@ -422,7 +469,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="сколько страниц распознавать в одном документе")
     s.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 1))
     s.add_argument("--timeout", type=int, default=ocr.DEFAULT_TIMEOUT)
+    s.add_argument("--retry-failed", action="store_true",
+                   help="вернуть в очередь сканы, где OCR не удался")
     s.set_defaults(func=cmd_ocr)
+
+    s = sub.add_parser("text", help="показать текст документа целиком")
+    s.add_argument("query", nargs="?", default="",
+                   help="запрос: берётся первый найденный документ")
+    s.add_argument("--id", type=int, help="номер документа в индексе")
+    s.add_argument("--chars", type=int, default=4000)
+    s.set_defaults(func=cmd_text)
     return p
 
 

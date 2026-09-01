@@ -181,3 +181,31 @@ def test_recycle_bin_is_not_indexed(conn, archive: Path):
     stats = indexer.run(connection_and_cfg := conn[0], conn[1])
     assert stats.scanned == 3
     assert not search_mod.search(connection_and_cfg, "удалённый акт")
+
+
+def test_changed_file_clears_stale_ocr_mark(conn, archive: Path):
+    """Файл изменился — прежнее распознавание устарело, отметка снимается."""
+    connection, cfg = conn
+    indexer.run(connection, cfg)
+    doc_id = search_mod.search(connection, "поставка щебня")[0]["id"]
+    connection.execute(
+        "UPDATE documents SET ocr_status = 'done', ocr_chars = 100 WHERE id = ?",
+        (doc_id,),
+    )
+    connection.commit()
+
+    target = archive / "2025" / "ООО СтройМонтаж" / "Письма" / "Исх 270.txt"
+    target.write_text(LETTER + chr(10) + "Дополнение к письму.", encoding="utf-8")
+    indexer.run(connection, cfg)
+
+    card = db.card(connection, doc_id)
+    assert card["ocr_status"] is None
+    assert card["ocr_chars"] is None
+
+
+def test_force_reindexes_everything(conn):
+    connection, cfg = conn
+    indexer.run(connection, cfg)
+    stats = indexer.run(connection, cfg, force=True)
+    assert stats.skipped == 0
+    assert stats.updated == 3

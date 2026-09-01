@@ -43,3 +43,12 @@ def test_snippet_falls_back_to_head_when_no_match_in_body():
 
 def test_snippet_on_empty_body():
     assert snippet.make("", "что угодно") == ""
+
+
+def test_numero_sign_survives_normalization():
+    """№ не должен превращаться в «No»: это знак номера, а не две буквы."""
+    assert textnorm.normalize("Исх. № 270 от 14.08.2025").startswith("Исх. № 270")
+
+
+def test_numero_sign_survives_together_with_nbsp():
+    assert textnorm.normalize("АКТ № 15") == "АКТ № 15"

@@ -35,6 +35,7 @@ def index_root(
     label: str,
     stats: IndexStats,
     progress=None,
+    force: bool = False,
 ) -> None:
     known = db.fingerprints(conn, label)
     seen: set[str] = set()
@@ -59,7 +60,8 @@ def index_root(
 
         prev = known.get(key)
         # тот же размер и та же дата — файл не трогали, разбирать нечего
-        if prev and prev[0] == st.st_size and abs(prev[1] - st.st_mtime) < 1.0:
+        if (not force and prev and prev[0] == st.st_size
+                and abs(prev[1] - st.st_mtime) < 1.0):
             stats.skipped += 1
             continue
 
@@ -110,13 +112,14 @@ def index_root(
     conn.commit()
 
 
-def run(conn: sqlite3.Connection, cfg: Config, progress=None) -> IndexStats:
+def run(conn: sqlite3.Connection, cfg: Config, progress=None,
+        force: bool = False) -> IndexStats:
     stats = IndexStats()
     started = time.monotonic()
     for root in cfg.roots:
         if not Path(root.path).exists():
             raise FileNotFoundError(f"Папка недоступна: {root.path}")
-        index_root(conn, cfg, root.path, root.label, stats, progress)
+        index_root(conn, cfg, root.path, root.label, stats, progress, force)
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_index', ?)",
                  (str(time.time()),))
     conn.commit()

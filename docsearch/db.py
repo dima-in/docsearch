@@ -124,10 +124,13 @@ def upsert(conn: sqlite3.Connection, doc: dict, body: str, lemmas: str) -> int:
     if row:
         doc_id = row["id"]
         conn.execute(
+            # содержимое файла изменилось, значит прежнее распознавание
+            # устарело — возвращаем документ в очередь на OCR
             """UPDATE documents SET root=?, rel_path=?, name=?, ext=?, size=?,
                mtime=?, doc_type=?, doc_number=?, doc_date=?, counterparty=?,
                object_code=?, page_count=?, needs_ocr=?, status=?, error=?,
-               indexed_at=? WHERE id=?""",
+               indexed_at=?, ocr_status=NULL, ocr_at=NULL, ocr_chars=NULL
+               WHERE id=?""",
             fields + (doc_id,),
         )
         conn.execute("DELETE FROM doc_fts WHERE rowid = ?", (doc_id,))
@@ -277,3 +280,25 @@ def fail_ocr(conn: sqlite3.Connection, doc_id: int, error: str) -> None:
         " WHERE id = ?",
         (time.time(), error[:500], doc_id),
     )
+
+
+def body(conn: sqlite3.Connection, doc_id: int) -> str:
+    """Сохранённый текст документа — как его видит поиск."""
+    row = conn.execute(
+        "SELECT body FROM doc_fts WHERE rowid = ?", (doc_id,)
+    ).fetchone()
+    return (row["body"] if row else "") or ""
+
+
+def card(conn: sqlite3.Connection, doc_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def reset_failed_ocr(conn: sqlite3.Connection) -> int:
+    """Вернуть в очередь сканы, на которых распознавание не удалось."""
+    cur = conn.execute(
+        "UPDATE documents SET ocr_status = NULL WHERE ocr_status = 'failed'"
+    )
+    conn.commit()
+    return cur.rowcount

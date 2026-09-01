@@ -23,13 +23,19 @@ INVISIBLE = dict.fromkeys(
 RE_SPACES = re.compile(r"[^\S\n]+")   # любые пробельные, кроме перевода строки
 RE_BLANK_LINES = re.compile(r"\n{3,}")
 
+# NFKC разбирает № на буквы «No». В делопроизводстве это знак номера в
+# каждом втором документе, портить его нельзя — прячем на время разбора
+NUMERO = "№"
+NUMERO_GUARD = ""
+
 
 def normalize(text: str) -> str:
     if not text:
         return ""
     text = text.translate(INVISIBLE)
     # NFKC схлопывает совместимые формы: лигатуры, неразрывные пробелы
-    text = unicodedata.normalize("NFKC", text)
+    text = unicodedata.normalize("NFKC", text.replace(NUMERO, NUMERO_GUARD))
+    text = text.replace(NUMERO_GUARD, NUMERO)
     text = RE_SPACES.sub(" ", text)
     text = RE_BLANK_LINES.sub("\n\n", text)
     return text.strip()
