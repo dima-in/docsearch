@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import config as config_mod
-from . import db, extract, morph
+from . import db, extract, morph, sniff
 from . import search as search_mod
 from .indexer import run as run_index
 from .walker import walk
@@ -256,6 +256,45 @@ def cmd_problems(args) -> int:
     conn.close()
     return 0
 
+# ---------------------------------------------------------------------- sniff
+
+def cmd_sniff(args) -> int:
+    """Чем файлы являются на самом деле — по первым байтам, а не по расширению."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+    rows = db.paths_by_status(conn, args.status, limit=args.limit)
+    conn.close()
+
+    if not rows:
+        print(f"Файлов со статусом «{args.status}» в индексе нет")
+        return 1
+
+    print(f"Проверяю {len(rows)} файл(ов) со статусом «{args.status}»")
+    print()
+    kinds: Counter = Counter()
+    for row in rows:
+        info = sniff.inspect(Path(row["path"]))
+        if not info["readable"]:
+            kinds["не читается"] += 1
+            print(f"  {row['rel_path']}")
+            print(f"    {info['error']}")
+            continue
+        kinds[info["type"]] += 1
+        if args.verbose:
+            mark = "  <- расширение врёт" if info["mismatch"] else ""
+            print(f"  {row['rel_path']}")
+            print(f"    {_human(info['size']):>9}  {info['type']}{mark}")
+            print(f"    {info['hex']}")
+            print(f"    {info['ascii']}")
+
+    print()
+    print("Что это на самом деле:")
+    for kind, cnt in kinds.most_common():
+        print(f"  {kind:<50}{cnt:>6}")
+    return 0
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
@@ -292,6 +331,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-n", "--limit", type=int, default=15,
                    help="сколько файлов показать в каждой категории")
     s.set_defaults(func=cmd_problems)
+
+    s = sub.add_parser("sniff", help="чем файлы являются на самом деле")
+    s.add_argument("--status", default="error",
+                   help="какие файлы смотреть: error, empty, needs_ocr")
+    s.add_argument("-n", "--limit", type=int, default=50)
+    s.add_argument("-v", "--verbose", action="store_true",
+                   help="показать каждый файл, а не только сводку")
+    s.set_defaults(func=cmd_sniff)
     return p
 
 

@@ -148,7 +148,7 @@ def problems(conn: sqlite3.Connection, limit: int = 20) -> dict:
         return [
             dict(r)
             for r in conn.execute(
-                f"SELECT name, rel_path, root, ext, size, error FROM documents"
+                f"SELECT name, path, rel_path, root, ext, size, error FROM documents"
                 f" WHERE status = ? ORDER BY {order} LIMIT ?",
                 (status, limit),
             )
@@ -174,3 +174,15 @@ def problems(conn: sqlite3.Connection, limit: int = 20) -> dict:
         "needs_ocr": rows("needs_ocr"),
         "ocr_by_ext": ocr_by_ext,
     }
+
+
+def paths_by_status(conn: sqlite3.Connection, status: str, limit: int = 50) -> list[dict]:
+    """Полные пути документов с указанным статусом разбора."""
+    return [
+        dict(r)
+        for r in conn.execute(
+            "SELECT path, rel_path, root, ext, size, error FROM documents"
+            " WHERE status = ? ORDER BY size DESC LIMIT ?",
+            (status, limit),
+        )
+    ]
