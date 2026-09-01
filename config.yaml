@@ -1,0 +1,27 @@
+# Что индексируем. path может быть локальной папкой или UNC-путём
+# вида //server/share/ПТО. Доступ нужен только на чтение.
+roots:
+  - label: "Тест"
+    path: "D:/docsearch/sample"
+
+index:
+  db: "D:/docsearch/index.db"
+  # Файлы крупнее — пропускаем (сканы альбомов чертежей на 500 МБ нам не нужны)
+  max_file_mb: 200
+  # Сколько символов текста класть в индекс с одного файла
+  max_text_chars: 400000
+  exclude_dirs:
+    - ".git"
+    - "$RECYCLE.BIN"
+    - "System Volume Information"
+    - "Temp"
+    - "tmp"
+    - "Корзина"
+    - "Архив копий"
+  # Временные файлы Word/Excel и прочий мусор
+  exclude_globs:
+    - "~$*"
+    - "*.tmp"
+    - "*.bak"
+    - "Thumbs.db"
+    - "desktop.ini"
