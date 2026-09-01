@@ -48,8 +48,11 @@ def cmd_survey(args) -> int:
         print(f"\nРазведка: {root.label} ({root.path})")
         counts: Counter = Counter()
         sizes: Counter = Counter()
+        dir_counts: Counter = Counter()
+        dir_sizes: Counter = Counter()
         pdfs: list[Path] = []
         total = 0
+        root_path = Path(root.path)
 
         for path in walk(root.path, cfg):
             try:
@@ -59,6 +62,14 @@ def cmd_survey(args) -> int:
             ext = path.suffix.lower() or "(без расширения)"
             counts[ext] += 1
             sizes[ext] += size
+            # верхняя папка от корня: по ней выбирают, с чего начать
+            try:
+                parts = path.relative_to(root_path).parts
+            except ValueError:
+                parts = ()
+            top = parts[0] if len(parts) > 1 else "(в корне)"
+            dir_counts[top] += 1
+            dir_sizes[top] += size
             total += 1
             if ext == ".pdf":
                 pdfs.append(path)
@@ -75,6 +86,14 @@ def cmd_survey(args) -> int:
             else:
                 mode = "-"
             print(f"  {ext:<16}{cnt:>8}{_human(sizes[ext]):>12}   {mode}")
+
+        if args.dirs and dir_counts:
+            print()
+            header = f"  {'папка верхнего уровня':<40}{'штук':>8}{'объём':>12}"
+            print(header)
+            for name, cnt in dir_counts.most_common(args.dirs):
+                shown = name if len(name) <= 38 else name[:37] + "…"
+                print(f"  {shown:<40}{cnt:>8}{_human(dir_sizes[name]):>12}")
 
         if pdfs and args.sample_pdf:
             sample = random.sample(pdfs, min(args.sample_pdf, len(pdfs)))
@@ -249,6 +268,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--top", type=int, default=20, help="сколько расширений показать")
     s.add_argument("--sample-pdf", type=int, default=30,
                    help="сколько PDF проверить на текстовый слой (0 — не проверять)")
+    s.add_argument("--dirs", type=int, default=15,
+                   help="сколько папок верхнего уровня показать")
     s.set_defaults(func=cmd_survey)
 
     s = sub.add_parser("index", help="построить или обновить индекс")
