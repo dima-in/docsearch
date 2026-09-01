@@ -11,7 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import config as config_mod
-from . import db, extract, morph, ocr, sniff, textnorm
+from . import db, extract, homoglyph, morph, ocr, sniff, textnorm
 from . import search as search_mod
 from .indexer import run as run_index
 from .walker import walk
@@ -313,7 +313,17 @@ def cmd_ocr(args) -> int:
     if getattr(args, "retry_failed", False):
         returned = db.reset_failed_ocr(conn)
         print(f"Возвращено в очередь после неудачи: {returned}")
-    todo = db.docs_for_ocr(conn, limit=args.limit)
+    if getattr(args, "id", None):
+        conn.execute("UPDATE documents SET ocr_status = NULL WHERE id = ?",
+                     (args.id,))
+        conn.commit()
+        todo = [r for r in db.docs_for_ocr(conn) if r["id"] == args.id]
+        if not todo:
+            print(f"Неуспех: документ {args.id} не помечен как скан")
+            conn.close()
+            return 1
+    else:
+        todo = db.docs_for_ocr(conn, limit=args.limit)
     before = db.ocr_progress(conn)
     if not todo:
         print(f"Распознавать нечего: сканов {before['total']}, "
@@ -337,7 +347,8 @@ def cmd_ocr(args) -> int:
                 db.fail_ocr(conn, row["id"], result.error)
                 failed += 1
             else:
-                text = textnorm.normalize(result.text)[: cfg.max_text_chars]
+                text = homoglyph.fix(textnorm.normalize(result.text))
+                text = text[: cfg.max_text_chars]
                 if text:
                     searchable = "\n".join([row["name"], row["rel_path"], text])
                     db.save_ocr(conn, row["id"], row["name"], text,
@@ -478,6 +489,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--timeout", type=int, default=ocr.DEFAULT_TIMEOUT)
     s.add_argument("--retry-failed", action="store_true",
                    help="вернуть в очередь сканы, где OCR не удался")
+    s.add_argument("--id", type=int,
+                   help="перераспознать один документ — для сравнения настроек")
     s.set_defaults(func=cmd_ocr)
 
     s = sub.add_parser("text", help="показать текст документа целиком")

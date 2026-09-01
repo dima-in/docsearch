@@ -19,7 +19,9 @@ COMMON_PATHS = [
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
 ]
 
-DEFAULT_LANG = "rus+eng"
+# Только русский: с "rus+eng" Tesseract на неоднозначных буквах
+# выбирает латиницу, и РТП-161 превращается в PIIT-161
+DEFAULT_LANG = "rus"
 DEFAULT_DPI = 300
 DEFAULT_TIMEOUT = 180
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
