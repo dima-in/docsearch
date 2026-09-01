@@ -30,7 +30,16 @@ python -m venv .venv
 
 ## Использование
 
-Указать папки в `config.yaml`, затем:
+Создать конфиг для своего архива:
+
+```bash
+.venv/Scripts/docsearch.exe init --root "//server/share/ПТО" --db index.db -o config.local.yaml
+```
+
+Файл пишется в UTF-8, обратные слэши из адресной строки проводника
+приводятся к прямым. Метка по умолчанию — имя последней папки в пути.
+
+Дальше:
 
 ```bash
 .venv/Scripts/python.exe -m docsearch.cli survey

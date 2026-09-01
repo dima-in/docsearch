@@ -11,7 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import config as config_mod
-from . import db, extract, homoglyph, morph, ocr, sniff, textnorm
+from . import db, extract, homoglyph, morph, ocr, scaffold, sniff, textnorm
 from . import search as search_mod
 from .indexer import run as run_index
 from .walker import walk
@@ -446,12 +446,41 @@ def cmd_text(args) -> int:
 
 
 
+# ----------------------------------------------------------------------- init
+
+def cmd_init(args) -> int:
+    """Создать конфиг для нового архива."""
+    target = Path(args.output)
+    try:
+        scaffold.write(target, args.root, args.label, args.db, args.force)
+    except FileExistsError:
+        print(f"Неуспех: {target} уже существует. Перезаписать — с флагом --force")
+        return 1
+
+    print(f"Сделал: создан {target.resolve()}")
+    print()
+    print(target.read_text(encoding="utf-8"))
+    print("Дальше — разведка, она только читает:")
+    print(f"  docsearch -c {target} survey")
+    return 0
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
     )
     p.add_argument("-c", "--config", default=None, help="путь к config.yaml")
     sub = p.add_subparsers(dest="command", required=True)
+
+    s = sub.add_parser("init", help="создать конфиг для нового архива")
+    s.add_argument("--root", required=True,
+                   help="папка с документами, можно UNC: //server/share/ПТО")
+    s.add_argument("--label", help="подпись в результатах поиска")
+    s.add_argument("--db", default="index.db", help="файл индекса")
+    s.add_argument("-o", "--output", default="config.local.yaml")
+    s.add_argument("--force", action="store_true", help="перезаписать существующий")
+    s.set_defaults(func=cmd_init)
 
     s = sub.add_parser("survey", help="разведка папки: что и в каких форматах лежит")
     s.add_argument("--root", help="метка корня из конфига")
