@@ -169,3 +169,15 @@ def test_problems_lists_unreadable_file(conn, archive: Path):
     assert report["counts"]["error"] == 1
     assert report["errors"][0]["name"] == "битый.docx"
     assert report["errors"][0]["error"]
+
+
+def test_recycle_bin_is_not_indexed(conn, archive: Path):
+    """Файл из корзины NAS не должен попадать в поиск."""
+    recycle = archive / "#recycle" / "2024"
+    recycle.mkdir(parents=True)
+    (recycle / "Удалённый акт 99.txt").write_text(
+        "АКТ освидетельствования скрытых работ № 99", encoding="utf-8"
+    )
+    stats = indexer.run(connection_and_cfg := conn[0], conn[1])
+    assert stats.scanned == 3
+    assert not search_mod.search(connection_and_cfg, "удалённый акт")

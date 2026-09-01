@@ -50,3 +50,22 @@ def test_double_quoted_backslashes_are_rejected_by_yaml(tmp_path: Path):
     line = '"' + BACKSLASH * 2 + "Artem-server" + BACKSLASH + 'Taininskaya16"'
     with pytest.raises(yaml.YAMLError):
         config_mod.load(write_config(tmp_path, line))
+
+
+def test_nas_service_folders_excluded_without_config(tmp_path: Path):
+    """Корзина Synology не индексируется, даже если её нет в конфиге."""
+    cfg = config_mod.load(write_config(tmp_path, '"./sample"'))
+    assert "#recycle" in cfg.exclude_dirs
+    assert "@eadir" in cfg.exclude_dirs
+
+
+def test_config_excludes_are_added_not_replaced(tmp_path: Path):
+    cfg_file = tmp_path / "config.local.yaml"
+    cfg_file.write_text(
+        "roots:\n  - path: './sample'\nindex:\n  db: 'index.db'\n"
+        "  exclude_dirs: ['Мои черновики']\n",
+        encoding="utf-8",
+    )
+    cfg = config_mod.load(cfg_file)
+    assert "мои черновики" in cfg.exclude_dirs
+    assert "#recycle" in cfg.exclude_dirs

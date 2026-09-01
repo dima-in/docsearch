@@ -10,6 +10,23 @@ import yaml
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config.yaml"
 
 
+BACKSLASH = chr(92)
+
+# Служебные папки, которые не должны попадать в индекс никогда — их
+# исключаем независимо от конфига. #recycle и @eaDir создаёт Synology:
+# это корзина и кэш эскизов; документы из корзины удалены сознательно,
+# и находить их в поиске никто не должен.
+DEFAULT_EXCLUDE_DIRS = {
+    "#recycle",
+    "#snapshot",
+    "@eadir",
+    ".@__thumb",
+    "$recycle.bin",
+    "system volume information",
+    ".git",
+}
+
+
 @dataclass
 class Root:
     label: str
@@ -25,12 +42,15 @@ class Config:
     exclude_dirs: set[str] = field(default_factory=set)
     exclude_globs: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        # служебные папки исключаются всегда, как бы ни собрали Config
+        self.exclude_dirs = DEFAULT_EXCLUDE_DIRS | {
+            d.lower() for d in self.exclude_dirs
+        }
+
     @property
     def max_file_bytes(self) -> int:
         return self.max_file_mb * 1024 * 1024
-
-
-BACKSLASH = chr(92)
 
 
 def load(path: str | os.PathLike | None = None) -> Config:
@@ -61,6 +81,6 @@ def load(path: str | os.PathLike | None = None) -> Config:
         max_file_mb=int(idx.get("max_file_mb", 200)),
         max_text_chars=int(idx.get("max_text_chars", 400_000)),
         # сравниваем имена папок без учёта регистра
-        exclude_dirs={d.lower() for d in idx.get("exclude_dirs", [])},
+        exclude_dirs=set(idx.get("exclude_dirs", [])),
         exclude_globs=list(idx.get("exclude_globs", [])),
     )
