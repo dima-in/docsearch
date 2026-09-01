@@ -380,6 +380,13 @@ def cmd_text(args) -> int:
 
     if args.id:
         doc_id = args.id
+    elif args.ocr:
+        found = db.last_ocr_ids(conn)
+        if not found:
+            print("Распознанных документов в индексе нет — сначала docsearch ocr")
+            conn.close()
+            return 1
+        doc_id = found[0]
     else:
         hits = search_mod.search(conn, args.query, limit=1)
         if not hits:
@@ -477,6 +484,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("query", nargs="?", default="",
                    help="запрос: берётся первый найденный документ")
     s.add_argument("--id", type=int, help="номер документа в индексе")
+    s.add_argument("--ocr", action="store_true",
+                   help="взять самый содержательный из распознанных сканов")
     s.add_argument("--chars", type=int, default=4000)
     s.set_defaults(func=cmd_text)
     return p

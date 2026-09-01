@@ -302,3 +302,15 @@ def reset_failed_ocr(conn: sqlite3.Connection) -> int:
     )
     conn.commit()
     return cur.rowcount
+
+
+def last_ocr_ids(conn: sqlite3.Connection, limit: int = 1) -> list[int]:
+    """Последние распознанные документы — по ним проверяют качество OCR."""
+    return [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM documents WHERE ocr_status = 'done'"
+            " ORDER BY ocr_chars DESC LIMIT ?",
+            (limit,),
+        )
+    ]
