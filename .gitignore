@@ -7,3 +7,6 @@ __pycache__/
 config.local.yaml
 survey_*.csv
 sample/
+*.egg-info/
+build/
+dist/
