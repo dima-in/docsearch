@@ -91,6 +91,44 @@ python -m venv .venv
 4. Старые `.doc` и `.xls` через LibreOffice в headless-режиме
 5. Семантический поиск поверх полнотекстового, на локальной модели
 
+## Свой конфиг
+
+`config.yaml` в репозитории — образец с демо-данными. Рабочие настройки
+держатся отдельно, чтобы имена серверов и папок не попадали в git:
+
+```bash
+copy config.yaml config.local.yaml
+```
+
+```bash
+.venv/Scripts/docsearch.exe -c config.local.yaml survey
+```
+
+Относительные пути в конфиге считаются от папки самого конфига, поэтому
+репозиторий переносится между машинами без правки путей.
+
+## Перенос на машину без интернета
+
+Рабочие компьютеры часто отрезаны от pypi и не дают прав администратора.
+Комплект для такого случая собирается на машине с сетью:
+
+```bash
+git bundle create docsearch.bundle --all
+```
+
+```bash
+.venv/Scripts/python.exe -m pip download -r requirements.txt -r requirements-dev.txt -d wheels
+```
+
+На целевой машине — установка без единого сетевого запроса:
+
+```bash
+.venv/Scripts/python.exe -m pip install --no-index --find-links wheels -r requirements.txt
+```
+
+Папку `.venv` переносить нельзя: в ней абсолютные пути. Окружение
+создаётся на месте заново.
+
 ## Развёртывание на сервере
 
 Python и venv в папке проекта, приложение — службой Windows через NSSM,
