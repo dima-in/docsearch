@@ -70,3 +70,29 @@ def test_reset_all_ocr_requeues_recognized(tmp_path: Path):
         assert len(db.docs_for_ocr(conn)) == 1
     finally:
         conn.close()
+
+
+def _add_scan(conn, path: str, ext: str) -> None:
+    conn.execute(
+        "INSERT INTO documents (path, root, rel_path, name, ext, size, mtime,"
+        " needs_ocr, status, indexed_at) VALUES (?,?,?,?,?,?,?,1,'ok',1.0)",
+        (path, "ПТО", path, path, ext, 10, 1.0),
+    )
+
+
+def test_ocr_queue_can_be_limited_by_extension(tmp_path: Path):
+    """Фотографии с объекта не должны попадать в очередь распознавания."""
+    conn = db.connect(str(tmp_path / "index.db"))
+    try:
+        _add_scan(conn, "письмо.pdf", ".pdf")
+        _add_scan(conn, "фото стены.jpg", ".jpg")
+        _add_scan(conn, "фото плиты.png", ".png")
+        conn.commit()
+
+        assert len(db.docs_for_ocr(conn)) == 3
+        only_pdf = db.docs_for_ocr(conn, exts=[".pdf"])
+        assert [r["ext"] for r in only_pdf] == [".pdf"]
+        # расширение принимается и без точки
+        assert len(db.docs_for_ocr(conn, exts=["pdf"])) == 1
+    finally:
+        conn.close()

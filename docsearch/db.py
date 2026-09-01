@@ -231,14 +231,19 @@ def paths_by_status(conn: sqlite3.Connection, status: str, limit: int = 50) -> l
     ]
 
 
-def docs_for_ocr(conn: sqlite3.Connection, limit: int | None = None) -> list[dict]:
+def docs_for_ocr(conn: sqlite3.Connection, limit: int | None = None,
+                 exts: list[str] | None = None) -> list[dict]:
     """Сканы, которые ещё не распознавались. Порядок — от мелких к крупным,
     чтобы за первые минуты прогона было видно результат."""
     sql = (
         "SELECT id, path, rel_path, name, ext, size FROM documents"
-        " WHERE needs_ocr = 1 AND ocr_status IS NULL ORDER BY size ASC"
+        " WHERE needs_ocr = 1 AND ocr_status IS NULL"
     )
     params: list = []
+    if exts:
+        sql += " AND ext IN (" + ",".join("?" * len(exts)) + ")"
+        params += [e.lower() if e.startswith(".") else "." + e.lower() for e in exts]
+    sql += " ORDER BY size ASC"
     if limit:
         sql += " LIMIT ?"
         params.append(limit)

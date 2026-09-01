@@ -17,6 +17,15 @@ from .indexer import run as run_index
 from .walker import walk
 
 
+def _interactive() -> bool:
+    """Прогресс с возвратом каретки уместен только в живой консоли:
+    в перенаправленном в файл выводе он превращается в кашу."""
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
 def _fix_console() -> None:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -329,7 +338,7 @@ def cmd_ocr(args) -> int:
             conn.close()
             return 1
     else:
-        todo = db.docs_for_ocr(conn, limit=args.limit)
+        todo = db.docs_for_ocr(conn, limit=args.limit, exts=args.ext)
     before = db.ocr_progress(conn)
     if not todo:
         print(f"Распознавать нечего: сканов {before['total']}, "
@@ -497,6 +506,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="вернуть в очередь сканы, где OCR не удался")
     s.add_argument("--redo", action="store_true",
                    help="перераспознать всё заново, не перечитывая файлы")
+    s.add_argument("--ext", action="append",
+                   help="распознавать только эти расширения, например --ext .pdf")
     s.add_argument("--id", type=int,
                    help="перераспознать один документ — для сравнения настроек")
     s.set_defaults(func=cmd_ocr)
