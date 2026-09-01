@@ -4,7 +4,7 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
-config.local.yaml
+config.*.yaml
 survey_*.csv
 sample/
 *.egg-info/
