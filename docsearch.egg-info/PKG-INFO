@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: docsearch
+Version: 0.1.0
+Summary: Поиск по архиву документов на сетевой папке
+Requires-Python: >=3.10
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: python-docx>=1.1.0
+Requires-Dist: openpyxl>=3.1.2
+Requires-Dist: PyMuPDF>=1.24.0
+Requires-Dist: pymorphy3>=2.0.1
+Requires-Dist: pymorphy3-dicts-ru>=2.4.417150
+Requires-Dist: striprtf>=0.0.26
+Requires-Dist: extract-msg>=0.48.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"

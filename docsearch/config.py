@@ -35,12 +35,20 @@ def load(path: str | os.PathLike | None = None) -> Config:
     with open(cfg_path, encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
 
-    roots = [Root(label=r.get("label") or r["path"], path=r["path"])
+    base = cfg_path.resolve().parent
+
+    def resolve(value: str) -> str:
+        path = Path(value)
+        return str(path if path.is_absolute() else (base / path).resolve())
+
+    roots = [Root(label=r.get("label") or r["path"], path=resolve(r["path"]))
              for r in raw.get("roots", [])]
     idx = raw.get("index", {}) or {}
+    # относительный путь к базе считаем от папки конфига, а не от текущей
+    # директории — иначе индекс будет появляться там, откуда запустили
     return Config(
         roots=roots,
-        db=idx.get("db", "index.db"),
+        db=resolve(idx.get("db", "index.db")),
         max_file_mb=int(idx.get("max_file_mb", 200)),
         max_text_chars=int(idx.get("max_text_chars", 400_000)),
         # сравниваем имена папок без учёта регистра

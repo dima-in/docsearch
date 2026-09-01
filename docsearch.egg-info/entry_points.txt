@@ -1,0 +1,2 @@
+[console_scripts]
+docsearch = docsearch.cli:main
