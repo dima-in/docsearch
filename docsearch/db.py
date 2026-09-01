@@ -136,3 +136,41 @@ def stats(conn: sqlite3.Connection) -> dict:
         "SELECT COUNT(*) c FROM documents WHERE needs_ocr = 1"
     ).fetchone()["c"]
     return {"total": total, "by_status": by_status, "by_ext": by_ext, "needs_ocr": ocr}
+
+
+def problems(conn: sqlite3.Connection, limit: int = 20) -> dict:
+    """Файлы, с которыми что-то не так: не открылись, пустые, без текста.
+
+    На реальном архиве это главный отчёт: он показывает, какую часть
+    документов поиск сейчас не видит и почему.
+    """
+    def rows(status: str, order: str = "size DESC"):
+        return [
+            dict(r)
+            for r in conn.execute(
+                f"SELECT name, rel_path, root, ext, size, error FROM documents"
+                f" WHERE status = ? ORDER BY {order} LIMIT ?",
+                (status, limit),
+            )
+        ]
+
+    counts = {
+        r["status"]: r["c"]
+        for r in conn.execute(
+            "SELECT status, COUNT(*) c FROM documents GROUP BY status"
+        )
+    }
+    ocr_by_ext = [
+        (r["ext"], r["c"])
+        for r in conn.execute(
+            "SELECT ext, COUNT(*) c FROM documents WHERE needs_ocr = 1"
+            " GROUP BY ext ORDER BY c DESC"
+        )
+    ]
+    return {
+        "counts": counts,
+        "errors": rows("error"),
+        "empty": rows("empty"),
+        "needs_ocr": rows("needs_ocr"),
+        "ocr_by_ext": ocr_by_ext,
+    }

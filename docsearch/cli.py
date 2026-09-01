@@ -190,6 +190,53 @@ def cmd_stats(args) -> int:
     return 0
 
 
+# ------------------------------------------------------------------- problems
+
+def cmd_problems(args) -> int:
+    """Что поиск сейчас не видит и почему."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+    rep = db.problems(conn, limit=args.limit)
+    total = sum(rep["counts"].values())
+    if not total:
+        print("Индекс пуст — сначала docsearch index")
+        conn.close()
+        return 1
+
+    ok = rep["counts"].get("ok", 0)
+    print(f"Всего в индексе: {total}, с извлечённым текстом: {ok} "
+          f"({ok / total * 100:.0f}%)")
+
+    if rep["ocr_by_ext"]:
+        print()
+        print("Сканы без текстового слоя (нужен OCR):")
+        for ext, cnt in rep["ocr_by_ext"]:
+            print(f"  {ext:<10}{cnt:>7}")
+        for row in rep["needs_ocr"]:
+            print(f"    {_human(row['size']):>9}  {row['root']} / {row['rel_path']}")
+
+    if rep["errors"]:
+        print()
+        print(f"Не открылись ({rep['counts'].get('error', 0)}):")
+        for row in rep["errors"]:
+            print(f"  {row['root']} / {row['rel_path']}")
+            print(f"    {row['error']}")
+
+    if rep["empty"]:
+        print()
+        print(f"Пустые после разбора ({rep['counts'].get('empty', 0)}):")
+        for row in rep["empty"]:
+            print(f"  {_human(row['size']):>9}  {row['root']} / {row['rel_path']}")
+
+    name_only = rep["counts"].get("name_only", 0)
+    if name_only:
+        print()
+        print(f"Только по имени и пути: {name_only} "
+              f"(dwg, doc, xls, изображения, архивы)")
+
+    conn.close()
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
@@ -219,6 +266,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stats", help="что сейчас в индексе")
     s.set_defaults(func=cmd_stats)
+
+    s = sub.add_parser("problems", help="что поиск не видит и почему")
+    s.add_argument("-n", "--limit", type=int, default=15,
+                   help="сколько файлов показать в каждой категории")
+    s.set_defaults(func=cmd_problems)
     return p
 
 

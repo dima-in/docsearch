@@ -148,3 +148,24 @@ def test_missing_root_is_reported(tmp_path: Path):
             indexer.run(connection, cfg)
     finally:
         connection.close()
+
+
+def test_problems_report_counts_parsed_share(conn):
+    connection, cfg = conn
+    indexer.run(connection, cfg)
+    report = db.problems(connection)
+    assert report["counts"]["ok"] == 2          # два txt
+    assert report["counts"]["name_only"] == 1   # dwg
+    assert report["errors"] == []
+
+
+def test_problems_lists_unreadable_file(conn, archive: Path):
+    connection, cfg = conn
+    # docx-расширение при не-docx содержимом: ровно то, что встречается
+    # в реальном архиве после ручного переименования
+    (archive / "битый.docx").write_bytes(b"not a real docx")
+    indexer.run(connection, cfg)
+    report = db.problems(connection)
+    assert report["counts"]["error"] == 1
+    assert report["errors"][0]["name"] == "битый.docx"
+    assert report["errors"][0]["error"]
