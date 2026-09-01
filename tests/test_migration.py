@@ -53,3 +53,20 @@ def test_migration_is_idempotent(tmp_path: Path):
         assert db.migrate(conn) == []      # свежая база уже полная
     finally:
         conn.close()
+
+
+def test_reset_all_ocr_requeues_recognized(tmp_path: Path):
+    conn = db.connect(str(tmp_path / "index.db"))
+    try:
+        conn.execute(
+            "INSERT INTO documents (path, root, rel_path, name, ext, size, mtime,"
+            " needs_ocr, status, indexed_at, ocr_status) VALUES"
+            " ('C:/a/скан.pdf','ПТО','скан.pdf','скан.pdf','.pdf',10,1.0,1,"
+            "'ok',1.0,'done')"
+        )
+        conn.commit()
+        assert db.docs_for_ocr(conn) == []
+        assert db.reset_all_ocr(conn) == 1
+        assert len(db.docs_for_ocr(conn)) == 1
+    finally:
+        conn.close()

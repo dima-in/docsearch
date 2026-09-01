@@ -309,8 +309,14 @@ def cmd_ocr(args) -> int:
         print(f"Неуспех: {exc}")
         return 1
 
+    if "eng" in args.lang.split("+") and "rus" in args.lang.split("+"):
+        print("Внимание: с языком eng вперемешку с rus Tesseract выбирает "
+              "латиницу на похожих буквах — РТП-161 станет PIIT-161")
     conn = db.connect(cfg.db)
-    if getattr(args, "retry_failed", False):
+    if getattr(args, "redo", False):
+        returned = db.reset_all_ocr(conn)
+        print(f"Возвращено в очередь на повторное распознавание: {returned}")
+    elif getattr(args, "retry_failed", False):
         returned = db.reset_failed_ocr(conn)
         print(f"Возвращено в очередь после неудачи: {returned}")
     if getattr(args, "id", None):
@@ -489,6 +495,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--timeout", type=int, default=ocr.DEFAULT_TIMEOUT)
     s.add_argument("--retry-failed", action="store_true",
                    help="вернуть в очередь сканы, где OCR не удался")
+    s.add_argument("--redo", action="store_true",
+                   help="перераспознать всё заново, не перечитывая файлы")
     s.add_argument("--id", type=int,
                    help="перераспознать один документ — для сравнения настроек")
     s.set_defaults(func=cmd_ocr)

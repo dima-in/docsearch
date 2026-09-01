@@ -314,3 +314,13 @@ def last_ocr_ids(conn: sqlite3.Connection, limit: int = 1) -> list[int]:
             (limit,),
         )
     ]
+
+
+def reset_all_ocr(conn: sqlite3.Connection) -> int:
+    """Вернуть в очередь все сканы — например, чтобы перепрогнать с другим
+    языком или разрешением, не перечитывая файлы заново."""
+    cur = conn.execute(
+        "UPDATE documents SET ocr_status = NULL WHERE ocr_status IS NOT NULL"
+    )
+    conn.commit()
+    return cur.rowcount
