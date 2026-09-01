@@ -11,7 +11,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA = """
+SCHEMA_TABLES = """
 CREATE TABLE IF NOT EXISTS documents (
     id          INTEGER PRIMARY KEY,
     path        TEXT    NOT NULL UNIQUE,
@@ -30,13 +30,11 @@ CREATE TABLE IF NOT EXISTS documents (
     needs_ocr   INTEGER NOT NULL DEFAULT 0,
     status      TEXT    NOT NULL DEFAULT 'ok',
     error       TEXT,
-    indexed_at  REAL    NOT NULL
+    indexed_at  REAL    NOT NULL,
+    ocr_status  TEXT,
+    ocr_at      REAL,
+    ocr_chars   INTEGER
 );
-
-CREATE INDEX IF NOT EXISTS idx_documents_ext    ON documents(ext);
-CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
-CREATE INDEX IF NOT EXISTS idx_documents_date   ON documents(doc_date);
-CREATE INDEX IF NOT EXISTS idx_documents_root   ON documents(root);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
     name,
@@ -51,6 +49,46 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
+# Индексы создаются только после миграции: они ссылаются на колонки,
+# которых в старой базе может ещё не быть
+SCHEMA_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_documents_ext    ON documents(ext);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_documents_date   ON documents(doc_date);
+CREATE INDEX IF NOT EXISTS idx_documents_root   ON documents(root);
+CREATE INDEX IF NOT EXISTS idx_documents_ocr    ON documents(needs_ocr, ocr_status);
+"""
+
+
+# Необязательные колонки: в базе, построенной прежней версией, их может не
+# быть. Ронять готовый индекс из-за нового поля недопустимо, поэтому
+# добавляем недостающее на месте
+OPTIONAL_COLUMNS = {
+    "doc_type": "TEXT",
+    "doc_number": "TEXT",
+    "doc_date": "TEXT",
+    "counterparty": "TEXT",
+    "object_code": "TEXT",
+    "page_count": "INTEGER",
+    "error": "TEXT",
+    "ocr_status": "TEXT",
+    "ocr_at": "REAL",
+    "ocr_chars": "INTEGER",
+}
+
+
+def migrate(conn: sqlite3.Connection) -> list[str]:
+    """Дополнить старую базу недостающими колонками. Возвращает добавленные."""
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
+    added = []
+    for column, kind in OPTIONAL_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {kind}")
+            added.append(column)
+    if added:
+        conn.commit()
+    return added
+
 
 def connect(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +96,9 @@ def connect(db_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.executescript(SCHEMA)
+    conn.executescript(SCHEMA_TABLES)
+    migrate(conn)
+    conn.executescript(SCHEMA_INDEXES)
     return conn
 
 
@@ -186,3 +226,54 @@ def paths_by_status(conn: sqlite3.Connection, status: str, limit: int = 50) -> l
             (status, limit),
         )
     ]
+
+
+def docs_for_ocr(conn: sqlite3.Connection, limit: int | None = None) -> list[dict]:
+    """Сканы, которые ещё не распознавались. Порядок — от мелких к крупным,
+    чтобы за первые минуты прогона было видно результат."""
+    sql = (
+        "SELECT id, path, rel_path, name, ext, size FROM documents"
+        " WHERE needs_ocr = 1 AND ocr_status IS NULL ORDER BY size ASC"
+    )
+    params: list = []
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return [dict(r) for r in conn.execute(sql, params)]
+
+
+def ocr_progress(conn: sqlite3.Connection) -> dict:
+    total = conn.execute(
+        "SELECT COUNT(*) c FROM documents WHERE needs_ocr = 1"
+    ).fetchone()["c"]
+    done = conn.execute(
+        "SELECT COUNT(*) c FROM documents WHERE ocr_status = 'done'"
+    ).fetchone()["c"]
+    failed = conn.execute(
+        "SELECT COUNT(*) c FROM documents WHERE ocr_status = 'failed'"
+    ).fetchone()["c"]
+    return {"total": total, "done": done, "failed": failed,
+            "left": total - done - failed}
+
+
+def save_ocr(conn: sqlite3.Connection, doc_id: int, name: str, body: str,
+             lemmas: str) -> None:
+    """Записать распознанный текст: он заменяет пустое тело скана."""
+    conn.execute(
+        "UPDATE documents SET ocr_status = 'done', ocr_at = ?, ocr_chars = ?,"
+        " status = 'ok' WHERE id = ?",
+        (time.time(), len(body), doc_id),
+    )
+    conn.execute("DELETE FROM doc_fts WHERE rowid = ?", (doc_id,))
+    conn.execute(
+        "INSERT INTO doc_fts (rowid, name, body, lemmas) VALUES (?,?,?,?)",
+        (doc_id, name, body, lemmas),
+    )
+
+
+def fail_ocr(conn: sqlite3.Connection, doc_id: int, error: str) -> None:
+    conn.execute(
+        "UPDATE documents SET ocr_status = 'failed', ocr_at = ?, error = ?"
+        " WHERE id = ?",
+        (time.time(), error[:500], doc_id),
+    )

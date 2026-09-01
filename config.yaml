@@ -24,3 +24,9 @@ index:
     - "*.bak"
     - "Thumbs.db"
     - "desktop.ini"
+
+# Распознавание сканов. Значения можно переопределить флагами команды ocr
+ocr:
+  lang: "rus+eng"
+  dpi: 300
+  max_pages: 40

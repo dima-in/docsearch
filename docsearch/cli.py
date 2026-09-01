@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 from pathlib import Path
 
 from . import config as config_mod
-from . import db, extract, morph, sniff
+from . import db, extract, morph, ocr, sniff, textnorm
 from . import search as search_mod
 from .indexer import run as run_index
 from .walker import walk
@@ -295,6 +298,76 @@ def cmd_sniff(args) -> int:
 
 
 
+# ------------------------------------------------------------------------ ocr
+
+def cmd_ocr(args) -> int:
+    """Распознать сканы. Долгая задача: можно прервать и продолжить."""
+    cfg = config_mod.load(args.config)
+    try:
+        cmd = ocr.check(args.lang)
+    except ocr.OcrUnavailable as exc:
+        print(f"Неуспех: {exc}")
+        return 1
+
+    conn = db.connect(cfg.db)
+    todo = db.docs_for_ocr(conn, limit=args.limit)
+    before = db.ocr_progress(conn)
+    if not todo:
+        print(f"Распознавать нечего: сканов {before['total']}, "
+              f"уже сделано {before['done']}, с ошибкой {before['failed']}")
+        conn.close()
+        return 0
+
+    print(f"Задача: распознать {len(todo)} из {before['left']} оставшихся "
+          f"({args.lang}, {args.dpi} dpi, потоков {args.workers})")
+    started = time.monotonic()
+    done = failed = empty = 0
+
+    def work(row):
+        return row, ocr.recognize(Path(row["path"]), cmd, lang=args.lang,
+                                  dpi=args.dpi, max_pages=args.max_pages,
+                                  timeout=args.timeout)
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        for row, result in pool.map(work, todo):
+            if result.error:
+                db.fail_ocr(conn, row["id"], result.error)
+                failed += 1
+            else:
+                text = textnorm.normalize(result.text)[: cfg.max_text_chars]
+                if text:
+                    searchable = "\n".join([row["name"], row["rel_path"], text])
+                    db.save_ocr(conn, row["id"], row["name"], text,
+                                morph.lemmatize(searchable))
+                    done += 1
+                else:
+                    # распозналось в пустоту: чистый бланк или брак скана
+                    db.fail_ocr(conn, row["id"], "распознано пусто")
+                    empty += 1
+
+            seen = done + failed + empty
+            if seen % 10 == 0:
+                conn.commit()
+                speed = seen / max(time.monotonic() - started, 1)
+                print(f"  распознано {done}, пусто {empty}, ошибок {failed}, "
+                      f"{speed:.2f} файл/с", end="\r", flush=True)
+
+    conn.commit()
+    after = db.ocr_progress(conn)
+    elapsed = time.monotonic() - started
+    print(" " * 90, end="\r")
+    print(f"Сделал: распознано {done}, пусто {empty}, ошибок {failed} "
+          f"за {elapsed / 60:.1f} мин")
+    print(f"  всего сканов {after['total']}, распознано {after['done']}, "
+          f"осталось {after['left']}")
+    if after["left"]:
+        rate = (done + failed + empty) / max(elapsed, 1)
+        hours = after["left"] / max(rate, 0.001) / 3600
+        print(f"  на остаток при этой скорости уйдёт ~{hours:.1f} ч")
+    conn.close()
+    return 0 if done else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
@@ -339,6 +412,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-v", "--verbose", action="store_true",
                    help="показать каждый файл, а не только сводку")
     s.set_defaults(func=cmd_sniff)
+
+    s = sub.add_parser("ocr", help="распознать сканы (долго, можно прерывать)")
+    s.add_argument("-n", "--limit", type=int, default=None,
+                   help="сколько файлов обработать за прогон")
+    s.add_argument("--lang", default=ocr.DEFAULT_LANG)
+    s.add_argument("--dpi", type=int, default=ocr.DEFAULT_DPI)
+    s.add_argument("--max-pages", type=int, default=40,
+                   help="сколько страниц распознавать в одном документе")
+    s.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 1))
+    s.add_argument("--timeout", type=int, default=ocr.DEFAULT_TIMEOUT)
+    s.set_defaults(func=cmd_ocr)
     return p
 
 
