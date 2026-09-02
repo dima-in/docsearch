@@ -195,6 +195,7 @@ def cmd_search(args) -> int:
         ext=args.ext,
         root=args.root,
         doc_type=args.type,
+        counterparty=args.org,
         date_from=getattr(args, "from"),
         date_to=args.to,
     )
@@ -244,6 +245,11 @@ def cmd_stats(args) -> int:
     for kind, cnt in st["by_type"]:
         share = cnt / st["total"] * 100 if st["total"] else 0
         print(f"  {kind:<24}{cnt:>8}{share:>7.0f}%")
+    print()
+    print("По организации:")
+    for org, cnt in st["by_org"]:
+        print(f"  {org:<42}{cnt:>8}")
+    print(f"  {'(не определена)':<42}{st['no_org']:>8}")
     print("\nПо расширению:")
     for ext, cnt in st["by_ext"]:
         print(f"  {ext:<14}{cnt:>8}")
@@ -559,6 +565,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--ext", help="фильтр по расширению, например .pdf")
     s.add_argument("--root", help="фильтр по корню")
     s.add_argument("--type", help="фильтр по типу документа, например акт")
+    s.add_argument("--org", help="фильтр по организации, часть названия")
     s.add_argument("--from", help="дата документа от, ГГГГ-ММ-ДД")
     s.add_argument("--to", help="дата документа до, ГГГГ-ММ-ДД")
     s.add_argument("-n", "--limit", type=int, default=20)

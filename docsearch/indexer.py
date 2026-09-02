@@ -72,8 +72,9 @@ def index_root(
         result = extract.extract(path)
         text = result.text[: cfg.max_text_chars]
         rel_path = str(path.relative_to(root_path))
-        attrs = meta.guess(path, rel_path, text)
+        attrs = meta.guess(path, rel_path, text, cfg.own_org)
         attrs.update({k: v for k, v in result.meta.items() if v})
+        attrs.pop("organizations", None)   # в карточку идёт только контрагент
 
         doc = {
             "path": key,

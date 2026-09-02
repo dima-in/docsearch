@@ -72,11 +72,11 @@ def test_guess_uses_folder_as_counterparty():
     )
     assert attrs["doc_type"] == "акт скрытых работ"
     assert attrs["doc_date"] == "2025-08-14"
-    assert attrs["counterparty"] == "ООО СтройМонтаж"
+    assert attrs["counterparty"] == "ООО «СтройМонтаж»"
 
 
 def test_counterparty_skips_service_folders():
-    assert meta.find_counterparty(r"2025\ООО СтройМонтаж\Письма\Исх 5.docx") == "ООО СтройМонтаж"
+    assert meta.find_counterparty(r"2025\ООО СтройМонтаж\Письма\Исх 5.docx") == "ООО «СтройМонтаж»"
 
 
 def test_counterparty_without_org_marker():

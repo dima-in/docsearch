@@ -23,6 +23,7 @@ class Filters:
     ext: str | None = None
     root: str | None = None
     doc_type: str | None = None
+    counterparty: str | None = None
     date_from: str | None = None
     date_to: str | None = None
     include_ocr_pending: bool = True
@@ -66,6 +67,10 @@ def _conditions(query: str, filters: Filters) -> tuple[str, list] | None:
     if filters.doc_type:
         where.append("d.doc_type = ?")
         params.append(filters.doc_type)
+    if filters.counterparty:
+        # по части названия: «маренго» должно находить «ООО «КБ Маренго»»
+        where.append("ru_lower(d.counterparty) LIKE ?")
+        params.append(f"%{filters.counterparty.lower()}%")
     if filters.date_from:
         where.append("d.doc_date >= ?")
         params.append(filters.date_from)

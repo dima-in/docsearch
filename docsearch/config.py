@@ -41,6 +41,7 @@ class Config:
     max_text_chars: int = 400_000
     exclude_dirs: set[str] = field(default_factory=set)
     exclude_globs: list[str] = field(default_factory=list)
+    own_org: str | None = None
 
     def __post_init__(self) -> None:
         # служебные папки исключаются всегда, как бы ни собрали Config
@@ -82,5 +83,6 @@ def load(path: str | os.PathLike | None = None) -> Config:
         max_text_chars=int(idx.get("max_text_chars", 400_000)),
         # сравниваем имена папок без учёта регистра
         exclude_dirs=set(idx.get("exclude_dirs", [])),
+        own_org=idx.get("own_organization") or None,
         exclude_globs=list(idx.get("exclude_globs", [])),
     )

@@ -84,7 +84,74 @@ GENERIC_FOLDERS = {
     "отчёты", "переписка", "приказы", "справки", "ведомости",
 }
 
-RE_ORG = re.compile(r"\b(ООО|АО|ЗАО|ПАО|ОАО|ИП|ГУП|МУП|ФГУП)\b", re.IGNORECASE)
+# Организация в шапке документа: ООО «ФБ-СТРОЙ», АО МостСтрой.
+# Форма в кавычках надёжнее — её и проверяем первой.
+FORMS = "ООО|ОАО|ЗАО|ПАО|АО|ИП|ГУП|МУП|ФГУП|ФГБУ|АНО|НКО"
+
+# Между формой и названием бывает аббревиатура: ООО КБ «Маренго»
+RE_ORG_QUOTED = re.compile(
+    r"\b(" + FORMS + r")\s*(?:[А-ЯЁ]{2,4}\s*)?[«\"']([^»\"']{2,60})[»\"']", re.IGNORECASE
+)
+# Название не переносится на другую строку: иначе «ООО ТеплоСети» плюс
+# следующая строка «Объект:» склеиваются в несуществующую организацию
+RE_ORG_PLAIN = re.compile(
+    r"\b(" + FORMS + r")[ \t]+([А-ЯЁ][\w\-]{1,30}(?:[ \t]+[А-ЯЁ][\w\-]{1,30}){0,2})"
+)
+RE_ORG = re.compile(r"\b(" + FORMS + r")\b", re.IGNORECASE)
+
+# Слова, которые идут сразу за формой собственности и организацией не являются
+ORG_NOISE = {"и", "в", "от", "на", "по", "для", "при"}
+
+
+def normalize_org(form: str, name: str) -> str:
+    """Привести к единому виду: ООО «Маренго»."""
+    name = " ".join(name.split()).strip(" .,;:-")
+    return f"{form.upper()} «{name}»"
+
+
+def find_organizations(text: str, limit: int = 6) -> list[str]:
+    """Организации, упомянутые в шапке документа, в порядке появления.
+
+    Первой обычно идёт та, чей это бланк, дальше — адресат. Дубликаты
+    убираем, сохраняя порядок.
+    """
+    found: list[str] = []
+    for match in RE_ORG_QUOTED.finditer(text):
+        org = normalize_org(match.group(1), match.group(2))
+        if org not in found:
+            found.append(org)
+    for match in RE_ORG_PLAIN.finditer(text):
+        # «ООО КБ «Маренго»» уже разобран формой в кавычках — не плодим
+        # из его начала отдельную организацию «ООО КБ»
+        tail = text[match.end():match.end() + 2].lstrip()
+        if tail[:1] in ("«", chr(34), "'"):
+            continue
+        name = match.group(2)
+        if name.split()[0].lower() in ORG_NOISE:
+            continue
+        org = normalize_org(match.group(1), name)
+        # без кавычек название могло уже попасться в кавычках
+        if org not in found and not any(org.split("«")[1][:8] in f for f in found):
+            found.append(org)
+    return found[:limit]
+
+
+def pick_counterparty(orgs: list[str], own: str | None) -> str | None:
+    """Контрагент — первая организация, которая не наша.
+
+    В исходящем письме собственный бланк стоит первым, и без этого
+    отсева контрагентом у половины архива оказались бы мы сами.
+    """
+    if not orgs:
+        return None
+    if not own:
+        return orgs[0]
+    needle = own.strip().lower()
+    for org in orgs:
+        if needle and needle in org.lower():
+            continue
+        return org
+    return None
 
 
 def find_counterparty(rel_path: str) -> str | None:
@@ -93,7 +160,10 @@ def find_counterparty(rel_path: str) -> str | None:
     parts = [p for p in Path(rel_path).parent.parts if p not in (".", "")]
     for part in reversed(parts):
         if RE_ORG.search(part):
-            return part
+            # приводим к тому же виду, что и организации из текста, иначе
+            # «ООО СтройМонтаж» и «ООО «СтройМонтаж»» будут двумя разными
+            found = find_organizations(part)
+            return found[0] if found else part
     for part in reversed(parts):
         if part.lower() not in GENERIC_FOLDERS and not part.isdigit():
             return part
@@ -172,7 +242,8 @@ def find_object_code(text: str) -> str | None:
     return m.group(1) if m else None
 
 
-def guess(path: Path, rel_path: str, text: str) -> dict:
+def guess(path: Path, rel_path: str, text: str,
+          own_org: str | None = None) -> dict:
     """Собрать атрибуты из имени файла, пути и шапки текста."""
     head = text[:HEAD_CHARS]
     name = path.stem
@@ -184,5 +255,9 @@ def guess(path: Path, rel_path: str, text: str) -> dict:
         "doc_number": find_number(name) or find_number(head),
         "doc_date": find_date(name) or find_date(head),
         "object_code": find_object_code(head) or find_object_code(folders),
-        "counterparty": find_counterparty(rel_path),
+        # организация из шапки документа надёжнее имени папки: папки в
+        # архиве названы по фамилиям и разделам, а не по контрагентам
+        "counterparty": (pick_counterparty(find_organizations(head), own_org)
+                         or find_counterparty(rel_path)),
+        "organizations": find_organizations(head),
     }

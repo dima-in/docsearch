@@ -94,6 +94,10 @@ def connect(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    # LIKE и lower() в SQLite понимают регистр только у латиницы: без своей
+    # функции «маренго» не найдёт «Маренго»
+    conn.create_function("ru_lower", 1,
+                         lambda value: value.lower() if value else value)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA_TABLES)
@@ -185,8 +189,20 @@ def stats(conn: sqlite3.Connection) -> dict:
             " GROUP BY doc_type ORDER BY c DESC"
         )
     ]
+    by_org = [
+        (r["counterparty"], r["c"])
+        for r in conn.execute(
+            "SELECT counterparty, COUNT(*) c FROM documents"
+            " WHERE counterparty IS NOT NULL"
+            " GROUP BY counterparty ORDER BY c DESC LIMIT 25"
+        )
+    ]
+    no_org = conn.execute(
+        "SELECT COUNT(*) c FROM documents WHERE counterparty IS NULL"
+    ).fetchone()["c"]
     return {"total": total, "by_status": by_status, "by_ext": by_ext,
-            "by_type": by_type, "needs_ocr": ocr}
+            "by_type": by_type, "by_org": by_org, "no_org": no_org,
+            "needs_ocr": ocr}
 
 
 def problems(conn: sqlite3.Connection, limit: int = 20) -> dict:

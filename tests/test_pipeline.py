@@ -74,7 +74,7 @@ def test_attributes_are_extracted(conn):
     assert row["doc_type"] == "письмо"
     assert row["doc_number"] == "270/ПТО"
     assert row["doc_date"] == "2025-08-14"
-    assert row["counterparty"] == "ООО СтройМонтаж"
+    assert row["counterparty"] == "ООО «СтройМонтаж»"
 
 
 def test_filters_narrow_results(conn):
