@@ -8,6 +8,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 from . import config as config_mod
@@ -32,6 +33,11 @@ def _fix_console() -> None:
             stream.reconfigure(encoding="utf-8")
         except Exception:
             pass
+
+
+def _stamp() -> str:
+    """Время для лога: ночной прогон читают утром, и «когда» важно."""
+    return datetime.now().strftime("%d.%m %H:%M")
 
 
 def _human(size: float) -> str:
@@ -135,7 +141,8 @@ def cmd_index(args) -> int:
         print("Внимание: pymorphy3 не установлен — поиск будет строгим "
               "по словоформе (pip install pymorphy3 pymorphy3-dicts-ru)")
     conn = db.connect(cfg.db)
-    print(f"Задача: проиндексировать корней {len(cfg.roots)} в {cfg.db}")
+    print(f"[{_stamp()}] Задача: проиндексировать корней {len(cfg.roots)} "
+          f"в {cfg.db}")
 
     def progress(st):
         print(f"  просмотрено {st.scanned}, разобрано {st.added + st.updated}, "
@@ -150,7 +157,8 @@ def cmd_index(args) -> int:
         conn.close()
 
     print(" " * 90, end="\r")
-    print(f"Сделал: просмотрено {stats.scanned} файлов за {stats.seconds:.0f} с")
+    print(f"[{_stamp()}] Сделал: просмотрено {stats.scanned} файлов "
+          f"за {stats.seconds / 60:.1f} мин")
     print(f"  новых {stats.added}, обновлено {stats.updated}, "
           f"без изменений {stats.skipped}, удалено из индекса {stats.removed}")
     print(f"  пропущено: формат не поддержан {stats.unsupported}, "
@@ -346,8 +354,8 @@ def cmd_ocr(args) -> int:
         conn.close()
         return 0
 
-    print(f"Задача: распознать {len(todo)} из {before['left']} оставшихся "
-          f"({args.lang}, {args.dpi} dpi, потоков {args.workers})")
+    print(f"[{_stamp()}] Задача: распознать {len(todo)} из {before['left']} "
+          f"оставшихся ({args.lang}, {args.dpi} dpi, потоков {args.workers})")
     started = time.monotonic()
     done = failed = empty = 0
 
@@ -385,8 +393,8 @@ def cmd_ocr(args) -> int:
     after = db.ocr_progress(conn)
     elapsed = time.monotonic() - started
     print(" " * 90, end="\r")
-    print(f"Сделал: распознано {done}, пусто {empty}, ошибок {failed} "
-          f"за {elapsed / 60:.1f} мин")
+    print(f"[{_stamp()}] Сделал: распознано {done}, пусто {empty}, "
+          f"ошибок {failed} за {elapsed / 60:.1f} мин")
     print(f"  всего сканов {after['total']}, распознано {after['done']}, "
           f"осталось {after['left']}")
     if after["left"]:
