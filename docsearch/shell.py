@@ -24,6 +24,7 @@ HELP = """
   о3  или  o3    открыть третий документ из выдачи
   т3  или  t3    показать текст третьего документа
   п3  или  p3    показать папку с третьим документом
+  ещё  или  +    следующая страница выдачи
   ?              эта справка
   в  или  q      выход
 
@@ -38,6 +39,7 @@ OPEN_KEYS = ("o", "о")
 TEXT_KEYS = ("t", "т")
 FOLDER_KEYS = ("p", "п")
 QUIT_WORDS = {"q", "в", "quit", "exit", "выход"}
+MORE_WORDS = {"ещё", "еще", "more", "+", "далее"}
 
 
 def parse_action(line: str) -> tuple[str, int] | None:
@@ -83,8 +85,8 @@ def show_folder(path: Path) -> str | None:
         return f"{type(exc).__name__}: {exc}"
 
 
-def print_results(rows: list[dict]) -> None:
-    for i, row in enumerate(rows, 1):
+def print_results(rows: list[dict], start: int = 1) -> None:
+    for i, row in enumerate(rows, start):
         number = f"№{row['doc_number']}" if row["doc_number"] else None
         head = " · ".join(
             x for x in (row["doc_type"], number, row["doc_date"],
@@ -103,9 +105,22 @@ def print_results(rows: list[dict]) -> None:
 
 def run(conn: sqlite3.Connection, limit: int = 10) -> int:
     print("Поиск по архиву. «?» — справка, «в» — выход.")
-    total = db.stats(conn)["total"]
-    print(f"В индексе документов: {total}")
+    total_docs = db.stats(conn)["total"]
+    print(f"В индексе документов: {total_docs}")
+
     rows: list[dict] = []
+    query = ""
+    shown = 0
+    found = 0
+
+    def report() -> None:
+        """Сколько всего нашлось и сколько из этого видно — без этой строки
+        человек думает, что документов в архиве всего десяток."""
+        if found <= shown:
+            print(f"Найдено: {found}")
+        else:
+            print(f"Найдено: {found}, показаны {shown - len(rows) + 1}–{shown}. "
+                  f"«ещё» — следующие {limit}")
 
     while True:
         try:
@@ -122,23 +137,39 @@ def run(conn: sqlite3.Connection, limit: int = 10) -> int:
             print(HELP)
             continue
 
+        if line.lower() in MORE_WORDS:
+            if not query:
+                print("Сначала что-нибудь найдите")
+                continue
+            if shown >= found:
+                print("Это была последняя страница")
+                continue
+            rows = search_mod.search(conn, query, limit=limit, offset=shown)
+            shown += len(rows)
+            print()
+            print_results(rows, start=shown - len(rows) + 1)
+            report()
+            continue
+
         action = parse_action(line)
         if action:
             what, number = action
             if not rows:
                 print("Сначала что-нибудь найдите")
                 continue
-            if not 1 <= number <= len(rows):
-                print(f"В выдаче {len(rows)} результатов, номер {number} не подходит")
+            first = shown - len(rows) + 1
+            if not first <= number <= shown:
+                print(f"На экране номера {first}–{shown}, {number} не подходит")
                 continue
-            row = rows[number - 1]
+            row = rows[number - first]
             path = Path(row["path"])
             if what == "open":
                 error = open_path(path)
                 print(f"Неуспех: {error}" if error else f"Открываю: {row['name']}")
             elif what == "folder":
                 error = show_folder(path)
-                print(f"Неуспех: {error}" if error else f"Показываю в проводнике: {path.parent}")
+                print(f"Неуспех: {error}" if error
+                      else f"Показываю в проводнике: {path.parent}")
             else:
                 body = db.body(conn, row["id"])
                 print("-" * 70)
@@ -147,9 +178,13 @@ def run(conn: sqlite3.Connection, limit: int = 10) -> int:
                     print(f"... ещё {len(body) - 4000} символов")
             continue
 
-        rows = search_mod.search(conn, line, limit=limit)
+        query = line
+        found = search_mod.count(conn, query)
+        rows = search_mod.search(conn, query, limit=limit)
+        shown = len(rows)
         if not rows:
-            print(f"Ничего не найдено по запросу «{line}»")
+            print(f"Ничего не найдено по запросу «{query}»")
             continue
         print()
-        print_results(rows)
+        print_results(rows, start=1)
+        report()

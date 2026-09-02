@@ -204,7 +204,13 @@ def cmd_search(args) -> int:
         conn.close()
         return 1
 
-    print(f"Найдено (показаны {len(rows)}):\n")
+    total = search_mod.count(conn, args.query, filters)
+    if total > len(rows):
+        print(f"Найдено: {total}, показаны первые {len(rows)}."
+              f" Больше — с флагом -n")
+    else:
+        print(f"Найдено: {total}")
+    print()
     for i, row in enumerate(rows, 1):
         number = f"№{row['doc_number']}" if row["doc_number"] else None
         head = " · ".join(x for x in (row["doc_type"], number, row["doc_date"]) if x)

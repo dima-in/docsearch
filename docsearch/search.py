@@ -48,17 +48,12 @@ def build_match_query(user_query: str) -> str:
     return " AND ".join(clauses)
 
 
-def search(
-    conn: sqlite3.Connection,
-    query: str,
-    filters: Filters | None = None,
-    limit: int = 20,
-    offset: int = 0,
-) -> list[dict]:
-    filters = filters or Filters()
+def _conditions(query: str, filters: Filters) -> tuple[str, list] | None:
+    """Условия отбора и параметры к ним. Один код для выдачи и для счётчика —
+    иначе «найдено» и показанное считаются по разным правилам."""
     match = build_match_query(query)
     if not match:
-        return []
+        return None
 
     where = ["doc_fts MATCH ?"]
     params: list = [match]
@@ -77,6 +72,20 @@ def search(
     if filters.date_to:
         where.append("d.doc_date <= ?")
         params.append(filters.date_to)
+    return " AND ".join(where), params
+
+
+def search(
+    conn: sqlite3.Connection,
+    query: str,
+    filters: Filters | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[dict]:
+    conditions = _conditions(query, filters or Filters())
+    if conditions is None:
+        return []
+    where, params = conditions
 
     sql = f"""
         SELECT d.id, d.path, d.rel_path, d.name, d.ext, d.size, d.root,
@@ -86,14 +95,12 @@ def search(
                bm25(doc_fts, {BM25_WEIGHTS}) AS score
         FROM doc_fts
         JOIN documents d ON d.id = doc_fts.rowid
-        WHERE {' AND '.join(where)}
+        WHERE {where}
         ORDER BY score
         LIMIT ? OFFSET ?
     """
-    params += [limit, offset]
-
     rows = []
-    for record in conn.execute(sql, params):
+    for record in conn.execute(sql, params + [limit, offset]):
         row = dict(record)
         # сниппет считаем сами: FTS5 показал бы совпадение в колонке лемм
         row["snippet"] = snippet_mod.make(row.pop("body") or "", query)
@@ -101,13 +108,16 @@ def search(
     return rows
 
 
-def count(conn: sqlite3.Connection, query: str, filters: Filters | None = None) -> int:
-    match = build_match_query(query)
-    if not match:
+def count(conn: sqlite3.Connection, query: str,
+          filters: Filters | None = None) -> int:
+    """Сколько всего документов подходит — с учётом тех же фильтров."""
+    conditions = _conditions(query, filters or Filters())
+    if conditions is None:
         return 0
+    where, params = conditions
     row = conn.execute(
-        "SELECT COUNT(*) c FROM doc_fts JOIN documents d ON d.id = doc_fts.rowid"
-        " WHERE doc_fts MATCH ?",
-        (match,),
+        f"SELECT COUNT(*) c FROM doc_fts JOIN documents d ON d.id = doc_fts.rowid"
+        f" WHERE {where}",
+        params,
     ).fetchone()
     return row["c"]

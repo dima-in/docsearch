@@ -209,3 +209,36 @@ def test_force_reindexes_everything(conn):
     stats = indexer.run(connection, cfg, force=True)
     assert stats.skipped == 0
     assert stats.updated == 3
+
+
+def test_count_respects_filters(conn):
+    """Счётчик и выдача должны считаться по одним правилам."""
+    connection, cfg = conn
+    indexer.run(connection, cfg)
+    # «СтройМонтаж» есть в пути и письма, и чертежа
+    assert search_mod.count(connection, "СтройМонтаж") == 2
+    only_letters = search_mod.Filters(doc_type="письмо")
+    assert search_mod.count(connection, "СтройМонтаж", only_letters) == 1
+    assert len(search_mod.search(connection, "СтройМонтаж", only_letters)) == 1
+
+
+def test_count_matches_unpaged_result(conn):
+    connection, cfg = conn
+    indexer.run(connection, cfg)
+    total = search_mod.count(connection, "СтройМонтаж")
+    assert len(search_mod.search(connection, "СтройМонтаж", limit=100)) == total
+
+
+def test_paging_returns_different_documents(conn):
+    connection, cfg = conn
+    indexer.run(connection, cfg)
+    first = search_mod.search(connection, "СтройМонтаж", limit=1)
+    second = search_mod.search(connection, "СтройМонтаж", limit=1, offset=1)
+    assert first and second
+    assert first[0]["id"] != second[0]["id"]
+
+
+def test_offset_past_end_is_empty(conn):
+    connection, cfg = conn
+    indexer.run(connection, cfg)
+    assert search_mod.search(connection, "СтройМонтаж", limit=10, offset=99) == []
