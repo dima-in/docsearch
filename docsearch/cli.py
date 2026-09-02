@@ -12,7 +12,8 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config as config_mod
-from . import db, extract, homoglyph, morph, ocr, scaffold, sniff, textnorm
+from . import db, extract, homoglyph, morph, ocr, scaffold, shell
+from . import sniff, textnorm
 from . import search as search_mod
 from .indexer import run as run_index
 from .walker import walk
@@ -33,6 +34,13 @@ def _fix_console() -> None:
             stream.reconfigure(encoding="utf-8")
         except Exception:
             pass
+    # Ввод с клавиатуры Windows отдаёт через системный API и перекодировать
+    # его нельзя. А вот перенаправленный ввод приходит байтами, и это UTF-8
+    try:
+        if not sys.stdin.isatty():
+            sys.stdin.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _stamp() -> str:
@@ -485,12 +493,32 @@ def cmd_init(args) -> int:
 
 
 
+# ---------------------------------------------------------------------- shell
+
+def cmd_shell(args) -> int:
+    """Интерактивный поиск: словари морфологии грузятся один раз."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+    try:
+        if not db.stats(conn)["total"]:
+            print("Индекс пуст — сначала docsearch index")
+            return 1
+        return shell.run(conn, limit=args.limit)
+    finally:
+        conn.close()
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
     )
     p.add_argument("-c", "--config", default=None, help="путь к config.yaml")
     sub = p.add_subparsers(dest="command", required=True)
+
+    s = sub.add_parser("shell", help="интерактивный поиск, запрос за запросом")
+    s.add_argument("-n", "--limit", type=int, default=10)
+    s.set_defaults(func=cmd_shell)
 
     s = sub.add_parser("init", help="создать конфиг для нового архива")
     s.add_argument("--root", required=True,
