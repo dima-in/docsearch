@@ -99,9 +99,9 @@ def run_tesseract(image: bytes, cmd: str, lang: str = DEFAULT_LANG,
 
 
 def _pdf_page_images(path: Path, dpi: int, max_pages: int):
-    import pymupdf
+    from .extract.pdf import open_pdf
 
-    doc = pymupdf.open(str(path))
+    doc = open_pdf(path)
     try:
         for number, page in enumerate(doc):
             if number >= max_pages:

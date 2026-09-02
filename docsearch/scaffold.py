@@ -15,7 +15,7 @@ roots:
     path: '{path}'
 
 index:
-  db: "{db}"
+  db: '{db}'
   max_file_mb: 200
   max_text_chars: 400000
   exclude_dirs:
@@ -40,14 +40,20 @@ def default_label(root: str) -> str:
     return parts[-1] if parts else "Архив"
 
 
-def normalize_root(root: str) -> str:
-    """Обратные слэши из проводника приводим к прямым: YAML их не любит."""
-    return root.strip().replace(chr(92), "/")
+def normalize_path(value: str) -> str:
+    """Обратные слэши приводим к прямым: в двойных кавычках YAML считает их
+    экранированием и конфиг вообще не читается."""
+    return value.strip().replace(chr(92), "/")
+
+
+# прежнее имя оставлено ради читаемости вызовов
+normalize_root = normalize_path
 
 
 def render(root: str, label: str | None = None, db: str = "index.db") -> str:
-    path = normalize_root(root)
-    return TEMPLATE.format(label=label or default_label(path), path=path, db=db)
+    path = normalize_path(root)
+    return TEMPLATE.format(label=label or default_label(path), path=path,
+                           db=normalize_path(db))
 
 
 def write(target: Path, root: str, label: str | None = None,

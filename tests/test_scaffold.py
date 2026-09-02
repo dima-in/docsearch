@@ -58,3 +58,12 @@ def test_force_overwrites(tmp_path: Path):
     scaffold.write(target, "D:/Архив")
     scaffold.write(target, "D:/Другой", force=True)
     assert "Другой" in target.read_text(encoding="utf-8")
+
+
+def test_absolute_windows_db_path_is_loadable(tmp_path: Path):
+    """Путь к базе с обратными слэшами не должен ломать разбор YAML."""
+    target = tmp_path / "config.local.yaml"
+    db_path = str(tmp_path / "index.db")      # C:\...\index.db на Windows
+    scaffold.write(target, "D:/Архив", db=db_path)
+    cfg = config_mod.load(target)
+    assert cfg.db.endswith("index.db")

@@ -145,6 +145,8 @@ def cmd_index(args) -> int:
           f"в {cfg.db}")
 
     def progress(st):
+        if not _interactive():
+            return
         print(f"  просмотрено {st.scanned}, разобрано {st.added + st.updated}, "
               f"без изменений {st.skipped}", end="\r", flush=True)
 
@@ -156,7 +158,8 @@ def cmd_index(args) -> int:
     finally:
         conn.close()
 
-    print(" " * 90, end="\r")
+    if _interactive():
+        print(" " * 90, end="\r")   # стереть строку прогресса
     print(f"[{_stamp()}] Сделал: просмотрено {stats.scanned} файлов "
           f"за {stats.seconds / 60:.1f} мин")
     print(f"  новых {stats.added}, обновлено {stats.updated}, "
@@ -385,6 +388,8 @@ def cmd_ocr(args) -> int:
             seen = done + failed + empty
             if seen % 10 == 0:
                 conn.commit()
+                if not _interactive():
+                    continue
                 speed = seen / max(time.monotonic() - started, 1)
                 print(f"  распознано {done}, пусто {empty}, ошибок {failed}, "
                       f"{speed:.2f} файл/с", end="\r", flush=True)
@@ -392,7 +397,8 @@ def cmd_ocr(args) -> int:
     conn.commit()
     after = db.ocr_progress(conn)
     elapsed = time.monotonic() - started
-    print(" " * 90, end="\r")
+    if _interactive():
+        print(" " * 90, end="\r")   # стереть строку прогресса
     print(f"[{_stamp()}] Сделал: распознано {done}, пусто {empty}, "
           f"ошибок {failed} за {elapsed / 60:.1f} мин")
     print(f"  всего сканов {after['total']}, распознано {after['done']}, "
