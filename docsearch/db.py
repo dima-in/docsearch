@@ -178,7 +178,15 @@ def stats(conn: sqlite3.Connection) -> dict:
     ocr = conn.execute(
         "SELECT COUNT(*) c FROM documents WHERE needs_ocr = 1"
     ).fetchone()["c"]
-    return {"total": total, "by_status": by_status, "by_ext": by_ext, "needs_ocr": ocr}
+    by_type = [
+        (r["doc_type"] or "(не определён)", r["c"])
+        for r in conn.execute(
+            "SELECT doc_type, COUNT(*) c FROM documents"
+            " GROUP BY doc_type ORDER BY c DESC"
+        )
+    ]
+    return {"total": total, "by_status": by_status, "by_ext": by_ext,
+            "by_type": by_type, "needs_ocr": ocr}
 
 
 def problems(conn: sqlite3.Connection, limit: int = 20) -> dict:

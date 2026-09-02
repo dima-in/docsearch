@@ -239,6 +239,11 @@ def cmd_stats(args) -> int:
     print("\nПо статусу разбора:")
     for status, cnt in st["by_status"].items():
         print(f"  {status:<14}{cnt:>8}")
+    print()
+    print("По типу документа:")
+    for kind, cnt in st["by_type"]:
+        share = cnt / st["total"] * 100 if st["total"] else 0
+        print(f"  {kind:<24}{cnt:>8}{share:>7.0f}%")
     print("\nПо расширению:")
     for ext, cnt in st["by_ext"]:
         print(f"  {ext:<14}{cnt:>8}")

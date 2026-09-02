@@ -28,11 +28,36 @@ def test_find_number_plain():
 
 
 def test_doc_type_from_name_wins_over_body():
-    assert meta.find_doc_type("Акт АОСР 12", "", "уважаемые коллеги") == "акт"
+    assert meta.find_doc_type("Акт АОСР 12", "", "уважаемые коллеги") == "акт скрытых работ"
 
 
 def test_doc_type_letter():
     assert meta.find_doc_type("Исх 15", "", "Уважаемые коллеги!") == "письмо"
+    assert meta.find_doc_type("Вх 44", "", "") == "письмо"
+
+
+def test_doc_type_ignores_lookalike_words():
+    """«акт» — подстрока слова «факт»: сравнение идёт по леммам, не по буквам."""
+    assert meta.find_doc_type("Факт. адрес: Мытищи") is None
+    assert meta.find_doc_type("фактически выполненные работы") is None
+    assert meta.find_doc_type("контакты подрядчика") is None
+
+
+def test_specific_types_win_over_general():
+    assert meta.find_doc_type("Акт о приемке выполненных работ") == "КС-2"
+    assert meta.find_doc_type("Протокол сертификационных испытаний") == "протокол испытаний"
+    assert meta.find_doc_type("Справка о стоимости выполненных работ") == "КС-3"
+
+
+def test_inflected_forms_are_recognized():
+    assert meta.find_doc_type("Реестр актов за 2025 год") == "реестр"
+    assert meta.find_doc_type("Сертификаты на материалы") == "сертификат"
+
+
+def test_construction_types():
+    assert meta.find_doc_type("Предписание об устранении") == "предписание"
+    assert meta.find_doc_type("Паспорт качества на бетон") == "паспорт"
+    assert meta.find_doc_type("Технологический регламент по монтажу") == "регламент"
 
 
 def test_object_code():
@@ -45,7 +70,7 @@ def test_guess_uses_folder_as_counterparty():
         r"2025\ООО СтройМонтаж\Акты\Акт АОСР 270 14.08.2025.pdf",
         "АКТ освидетельствования скрытых работ № 270",
     )
-    assert attrs["doc_type"] == "акт"
+    assert attrs["doc_type"] == "акт скрытых работ"
     assert attrs["doc_date"] == "2025-08-14"
     assert attrs["counterparty"] == "ООО СтройМонтаж"
 
