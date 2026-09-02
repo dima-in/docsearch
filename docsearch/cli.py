@@ -401,12 +401,17 @@ def cmd_ocr(args) -> int:
         print(" " * 90, end="\r")   # стереть строку прогресса
     print(f"[{_stamp()}] Сделал: распознано {done}, пусто {empty}, "
           f"ошибок {failed} за {elapsed / 60:.1f} мин")
+    left = db.ocr_left(conn, exts=args.ext)
+    scope = " (" + ", ".join(args.ext) + ")" if args.ext else ""
     print(f"  всего сканов {after['total']}, распознано {after['done']}, "
-          f"осталось {after['left']}")
-    if after["left"]:
+          f"осталось в этом отборе{scope} {left}")
+    if left:
         rate = (done + failed + empty) / max(elapsed, 1)
-        hours = after["left"] / max(rate, 0.001) / 3600
+        hours = left / max(rate, 0.001) / 3600
         print(f"  на остаток при этой скорости уйдёт ~{hours:.1f} ч")
+    elif after["left"]:
+        print(f"  вне отбора осталось {after['left']} — это изображения, "
+              f"распознавать их отдельным решением")
     conn.close()
     return 0 if done else 1
 

@@ -250,6 +250,12 @@ def docs_for_ocr(conn: sqlite3.Connection, limit: int | None = None,
     return [dict(r) for r in conn.execute(sql, params)]
 
 
+def ocr_left(conn: sqlite3.Connection, exts: list[str] | None = None) -> int:
+    """Сколько сканов ещё не распознано — с учётом отбора по расширениям.
+    Без этого отчёт пугает остатком из фотографий, которые никто не просил."""
+    return len(docs_for_ocr(conn, exts=exts))
+
+
 def ocr_progress(conn: sqlite3.Connection) -> dict:
     total = conn.execute(
         "SELECT COUNT(*) c FROM documents WHERE needs_ocr = 1"
