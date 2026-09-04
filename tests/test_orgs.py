@@ -52,3 +52,14 @@ def test_folder_name_normalized_to_same_form():
 
 def test_no_organization_in_plain_text():
     assert meta.find_organizations("получено от ООО и передано далее") == []
+
+
+def test_typographic_dash_is_unified():
+    """«ПД‐ПРОЕКТ» с типографским дефисом и «ПД-ПРОЕКТ» — одна организация."""
+    typographic = meta.find_organizations("ООО " + chr(171) + "ПД" + chr(0x2010) + "ПРОЕКТ" + chr(187))
+    ordinary = meta.find_organizations("ООО " + chr(171) + "ПД-ПРОЕКТ" + chr(187))
+    assert typographic == ordinary
+
+
+def test_folder_without_org_marker_gives_nothing():
+    assert meta.find_counterparty(chr(92).join(["Фото", "Гор", "снимок.jpg"])) is None

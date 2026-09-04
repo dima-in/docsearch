@@ -36,8 +36,10 @@ def index_root(
     stats: IndexStats,
     progress=None,
     force: bool = False,
+    retry_errors: bool = False,
 ) -> None:
     known = db.fingerprints(conn, label)
+    retry = db.error_paths(conn, label) if retry_errors else set()
     seen: set[str] = set()
     pending = 0
 
@@ -60,7 +62,8 @@ def index_root(
 
         prev = known.get(key)
         # тот же размер и та же дата — файл не трогали, разбирать нечего
-        if (not force and prev and prev[0] == st.st_size
+        if (not force and key not in retry and prev
+                and prev[0] == st.st_size
                 and abs(prev[1] - st.st_mtime) < 1.0):
             stats.skipped += 1
             continue
@@ -114,13 +117,14 @@ def index_root(
 
 
 def run(conn: sqlite3.Connection, cfg: Config, progress=None,
-        force: bool = False) -> IndexStats:
+        force: bool = False, retry_errors: bool = False) -> IndexStats:
     stats = IndexStats()
     started = time.monotonic()
     for root in cfg.roots:
         if not Path(root.path).exists():
             raise FileNotFoundError(f"Папка недоступна: {root.path}")
-        index_root(conn, cfg, root.path, root.label, stats, progress, force)
+        index_root(conn, cfg, root.path, root.label, stats, progress,
+                   force, retry_errors)
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_index', ?)",
                  (str(time.time()),))
     conn.commit()

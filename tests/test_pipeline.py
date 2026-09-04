@@ -242,3 +242,19 @@ def test_offset_past_end_is_empty(conn):
     connection, cfg = conn
     indexer.run(connection, cfg)
     assert search_mod.search(connection, "СтройМонтаж", limit=10, offset=99) == []
+
+
+def test_retry_errors_reprocesses_only_failed(conn, archive: Path):
+    """Сбой сети — не приговор: такие файлы должны разбираться повторно."""
+    connection, cfg = conn
+    broken = archive / "сорвался.docx"
+    broken.write_bytes(b"not a real docx")
+    indexer.run(connection, cfg)
+    assert db.problems(connection)["counts"]["error"] == 1
+
+    # файл стал читаемым, но размер и дата совпадают с прежними
+    stats = indexer.run(connection, cfg)
+    assert stats.updated == 0          # обычный прогон его не тронет
+
+    stats = indexer.run(connection, cfg, retry_errors=True)
+    assert stats.updated == 1          # а с флагом — повторит

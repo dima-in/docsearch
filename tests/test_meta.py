@@ -80,7 +80,12 @@ def test_counterparty_skips_service_folders():
 
 
 def test_counterparty_without_org_marker():
-    assert meta.find_counterparty(r"2025\Северная площадка\Письма\Исх 5.docx") == "Северная площадка"
+    """Папка без признака организации контрагентом не считается: иначе в
+    отчёт попадают «Новая папка», «DWG» и «Фото»."""
+    assert meta.find_counterparty(
+        chr(92).join(["2025", "Северная площадка", "Письма", "Исх 5.docx"])) is None
+    assert meta.find_counterparty(
+        chr(92).join(["Туйгун", "Рабочий стол", "Новая папка", "АР4.pdf"])) is None
 
 
 def test_counterparty_flat_path():

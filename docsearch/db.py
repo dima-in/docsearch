@@ -194,7 +194,7 @@ def stats(conn: sqlite3.Connection) -> dict:
         for r in conn.execute(
             "SELECT counterparty, COUNT(*) c FROM documents"
             " WHERE counterparty IS NOT NULL"
-            " GROUP BY counterparty ORDER BY c DESC LIMIT 25"
+            " GROUP BY ru_lower(counterparty) ORDER BY c DESC LIMIT 25"
         )
     ]
     no_org = conn.execute(
@@ -359,3 +359,15 @@ def reset_all_ocr(conn: sqlite3.Connection) -> int:
     )
     conn.commit()
     return cur.rowcount
+
+
+def error_paths(conn: sqlite3.Connection, root: str) -> set[str]:
+    """Пути, на которых разбор сорвался. Часть таких сбоев — сетевые
+    и случайные, их имеет смысл повторить."""
+    return {
+        r["path"]
+        for r in conn.execute(
+            "SELECT path FROM documents WHERE root = ? AND status = 'error'",
+            (root,),
+        )
+    }

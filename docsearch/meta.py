@@ -103,9 +103,18 @@ RE_ORG = re.compile(r"\b(" + FORMS + r")\b", re.IGNORECASE)
 ORG_NOISE = {"и", "в", "от", "на", "по", "для", "при"}
 
 
+# Типографские тире и минусы, которые встречаются вместо обычного дефиса
+DASHES = {0x2010: "-", 0x2011: "-", 0x2012: "-", 0x2013: "-", 0x2014: "-",
+          0x2212: "-"}
+
+
 def normalize_org(form: str, name: str) -> str:
-    """Привести к единому виду: ООО «Маренго»."""
-    name = " ".join(name.split()).strip(" .,;:-")
+    """Привести к единому виду: ООО «Маренго».
+
+    Тире выравниваем: «ПД‐ПРОЕКТ» с типографским дефисом и «ПД-ПРОЕКТ» с
+    обычным — одна организация, а в отчёте выглядели как две.
+    """
+    name = " ".join(name.translate(DASHES).split()).strip(" .,;:-")
     return f"{form.upper()} «{name}»"
 
 
@@ -164,9 +173,9 @@ def find_counterparty(rel_path: str) -> str | None:
             # «ООО СтройМонтаж» и «ООО «СтройМонтаж»» будут двумя разными
             found = find_organizations(part)
             return found[0] if found else part
-    for part in reversed(parts):
-        if part.lower() not in GENERIC_FOLDERS and not part.isdigit():
-            return part
+    # Прежде здесь возвращалась «последняя неслужебная папка», и в отчёт
+    # попадали «Новая папка», «DWG», «Фото», «Балки». Лучше честно ничего,
+    # чем мусор, который выглядит как контрагент
     return None
 
 

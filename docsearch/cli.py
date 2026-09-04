@@ -159,7 +159,8 @@ def cmd_index(args) -> int:
               f"без изменений {st.skipped}", end="\r", flush=True)
 
     try:
-        stats = run_index(conn, cfg, progress=progress, force=args.force)
+        stats = run_index(conn, cfg, progress=progress, force=args.force,
+                          retry_errors=args.retry_errors)
     except FileNotFoundError as exc:
         print(f"\nНеуспех: {exc}")
         return 1
@@ -558,6 +559,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("index", help="построить или обновить индекс")
     s.add_argument("--force", action="store_true",
                    help="разобрать заново всё, а не только изменившееся")
+    s.add_argument("--retry-errors", action="store_true",
+                   help="повторить файлы, на которых разбор сорвался")
     s.set_defaults(func=cmd_index)
 
     s = sub.add_parser("search", help="искать по индексу")
