@@ -130,3 +130,44 @@ def run(conn: sqlite3.Connection, cfg: Config, progress=None,
     conn.commit()
     stats.seconds = time.monotonic() - started
     return stats
+
+
+def reparse(conn: sqlite3.Connection, cfg: Config, progress=None) -> dict:
+    """Пересчитать атрибуты по уже сохранённому тексту.
+
+    Правила извлечения меняются чаще, чем сам архив. Полная переиндексация
+    ради них означала бы час чтения по сети и — что хуже — потерю
+    распознанных сканов. Здесь файлы не открываются вообще: текст уже
+    лежит в индексе, меняются только тип, номер, дата, контрагент и шифр.
+    """
+    changed = 0
+    seen = 0
+    rows = conn.execute(
+        "SELECT d.id, d.path, d.rel_path, d.doc_type, d.doc_number,"
+        " d.doc_date, d.counterparty, d.object_code,"
+        " (SELECT body FROM doc_fts WHERE rowid = d.id) AS body"
+        " FROM documents d"
+    ).fetchall()
+
+    for row in rows:
+        seen += 1
+        attrs = meta.guess(Path(row["path"]), row["rel_path"],
+                           row["body"] or "", cfg.own_org)
+        attrs.pop("organizations", None)
+        fields = ("doc_type", "doc_number", "doc_date", "counterparty",
+                  "object_code")
+        if all(attrs.get(f) == row[f] for f in fields):
+            continue
+        conn.execute(
+            "UPDATE documents SET doc_type=?, doc_number=?, doc_date=?,"
+            " counterparty=?, object_code=? WHERE id=?",
+            tuple(attrs.get(f) for f in fields) + (row["id"],),
+        )
+        changed += 1
+        if changed % 500 == 0:
+            conn.commit()
+        if progress and seen % 500 == 0:
+            progress(seen, len(rows), changed)
+
+    conn.commit()
+    return {"seen": seen, "changed": changed}

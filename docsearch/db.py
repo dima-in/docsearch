@@ -373,11 +373,16 @@ def error_paths(conn: sqlite3.Connection, root: str) -> set[str]:
     }
 
 
+# Для каждой грани своя сортировка: у категорий важно, чего больше,
+# у организаций — найти нужную в длинном списке, у годов — свежие сверху
 FACET_FIELDS = {
-    "type": "d.doc_type",
-    "org": "d.counterparty",
-    "year": "substr(d.doc_date, 1, 4)",
-    "ext": "d.ext",
+    "type": ("d.doc_type", "c DESC"),
+    # сортируем по названию внутри кавычек, иначе всё сгруппируется
+    # по форме собственности: сначала все АО, потом все ООО
+    "org": ("d.counterparty",
+            "ru_lower(substr(value, instr(value, '«') + 1))"),
+    "year": ("substr(d.doc_date, 1, 4)", "value DESC"),
+    "ext": ("d.ext", "c DESC"),
 }
 
 
@@ -389,11 +394,15 @@ def facets(conn: sqlite3.Connection, source: str, where: str, params: list,
     значения, по которым ничего не найдётся.
     """
     result: dict[str, list] = {}
-    for name, column in FACET_FIELDS.items():
+    for name, (column, order) in FACET_FIELDS.items():
+        # сначала отбираем самые частые, и только потом сортируем для показа:
+        # алфавитный порядок с ограничением отрезал бы всё после буквы «В»
         rows = conn.execute(
-            f"SELECT {column} AS value, COUNT(*) c FROM {source}"
-            f" WHERE {where} AND {column} IS NOT NULL AND {column} != ''"
-            f" GROUP BY ru_lower({column}) ORDER BY c DESC LIMIT ?",
+            f"SELECT value, c FROM ("
+            f"  SELECT {column} AS value, COUNT(*) c FROM {source}"
+            f"  WHERE {where} AND {column} IS NOT NULL AND {column} != ''"
+            f"  GROUP BY ru_lower({column}) ORDER BY c DESC LIMIT ?"
+            f") ORDER BY {order}",
             params + [limit],
         )
         result[name] = [{"value": r["value"], "count": r["c"]} for r in rows]

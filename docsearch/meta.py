@@ -179,12 +179,26 @@ def find_counterparty(rel_path: str) -> str | None:
     return None
 
 
+# Даты за пределами этого окна — не даты, а числа, похожие на дату:
+# номера версий, шифры, обрывки распознавания. Реальный архив ПТО не
+# содержит документов 2051 года, а вот «2051» в тексте попадается
+OLDEST_YEAR = 1990
+
+
+def _plausible_years() -> tuple[int, int]:
+    from datetime import date
+
+    # на год вперёд: документы датируют будущим сроком, дальше — ошибка
+    return OLDEST_YEAR, date.today().year + 1
+
+
 def _norm_date(day: str, month: str, year: str) -> str | None:
     d, m = int(day), int(month)
     y = int(year)
     if y < 100:
         y += 2000 if y < 70 else 1900
-    if not (1 <= d <= 31 and 1 <= m <= 12 and 1900 <= y <= 2100):
+    oldest, newest = _plausible_years()
+    if not (1 <= d <= 31 and 1 <= m <= 12 and oldest <= y <= newest):
         return None
     return f"{y:04d}-{m:02d}-{d:02d}"
 

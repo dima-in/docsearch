@@ -15,6 +15,7 @@ from . import config as config_mod
 from . import db, extract, homoglyph, morph, ocr, scaffold, shell
 from . import sniff, textnorm
 from . import search as search_mod
+from . import indexer
 from .indexer import run as run_index
 from .walker import walk
 
@@ -558,6 +559,34 @@ def cmd_serve(args) -> int:
 
 
 
+# -------------------------------------------------------------------- reparse
+
+def cmd_reparse(args) -> int:
+    """Пересчитать атрибуты по сохранённому тексту, не трогая файлы."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+    print(f"[{_stamp()}] Задача: пересчитать атрибуты в {cfg.db}")
+    if not cfg.own_org:
+        print("  Внимание: own_organization в конфиге не задан — контрагентом"
+              " будет ваша же организация из шапки")
+
+    def progress(seen, total, changed):
+        if _interactive():
+            print(f"  просмотрено {seen} из {total}, изменено {changed}",
+                  end=chr(13), flush=True)
+
+    started = time.monotonic()
+    result = indexer.reparse(conn, cfg, progress=progress)
+    conn.close()
+    if _interactive():
+        print(" " * 90, end=chr(13))
+    print(f"[{_stamp()}] Сделал: просмотрено {result['seen']}, "
+          f"изменено {result['changed']} за {time.monotonic() - started:.0f} с")
+    print("Успех: атрибуты пересчитаны, распознанные сканы не тронуты")
+    return 0
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
@@ -601,6 +630,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--retry-errors", action="store_true",
                    help="повторить файлы, на которых разбор сорвался")
     s.set_defaults(func=cmd_index)
+
+    s = sub.add_parser("reparse",
+                       help="пересчитать тип, дату, контрагента по сохранённому тексту")
+    s.set_defaults(func=cmd_reparse)
 
     s = sub.add_parser("search", help="искать по индексу")
     s.add_argument("query", help="слова или фраза в кавычках")

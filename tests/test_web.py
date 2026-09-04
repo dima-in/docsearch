@@ -109,3 +109,12 @@ def test_paging(client):
                         params={"q": "подрядчик", "per_page": 1, "page": 2}).json()
     assert first["total"] == 2
     assert first["results"][0]["id"] != second["results"][0]["id"]
+
+
+def test_facets_are_ordered_for_reading(client):
+    """Организации по алфавиту, годы по убыванию — так их и ищут глазами."""
+    data = client.get("/api/search").json()
+    orgs = [item["value"] for item in data["facets"]["org"]]
+    assert orgs == sorted(orgs, key=lambda v: v.split("«")[-1].lower())
+    years = [item["value"] for item in data["facets"]["year"]]
+    assert years == sorted(years, reverse=True)
