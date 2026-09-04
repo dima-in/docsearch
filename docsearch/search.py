@@ -3,6 +3,9 @@
 Запрос лемматизируется и уходит в колонку lemmas, поэтому «поставка щебня»
 находит «поставку щебня» и «поставок щебня». Текст в кавычках ищется как
 точная фраза по исходному тексту.
+
+Запрос может быть и пустым: тогда работают одни фильтры, и это просмотр
+архива по категориям, а не поиск.
 """
 from __future__ import annotations
 
@@ -17,6 +20,13 @@ RE_PHRASE = re.compile(r'"([^"]+)"')
 # Имя файла весит больше текста: попадание в название почти всегда точнее
 BM25_WEIGHTS = "10.0, 1.0, 3.0"
 
+WITH_QUERY = "doc_fts JOIN documents d ON d.id = doc_fts.rowid"
+WITHOUT_QUERY = "documents d"
+
+FIELDS = ("d.id, d.path, d.rel_path, d.name, d.ext, d.size, d.root,"
+          " d.doc_type, d.doc_number, d.doc_date, d.counterparty,"
+          " d.object_code, d.status, d.needs_ocr")
+
 
 @dataclass
 class Filters:
@@ -24,6 +34,7 @@ class Filters:
     root: str | None = None
     doc_type: str | None = None
     counterparty: str | None = None
+    year: str | None = None
     date_from: str | None = None
     date_to: str | None = None
     include_ocr_pending: bool = True
@@ -49,15 +60,24 @@ def build_match_query(user_query: str) -> str:
     return " AND ".join(clauses)
 
 
-def _conditions(query: str, filters: Filters) -> tuple[str, list] | None:
-    """Условия отбора и параметры к ним. Один код для выдачи и для счётчика —
-    иначе «найдено» и показанное считаются по разным правилам."""
-    match = build_match_query(query)
-    if not match:
-        return None
+def conditions(query: str, filters: Filters | None = None) -> tuple[str, str, list]:
+    """Источник, условия отбора и параметры к ним.
 
-    where = ["doc_fts MATCH ?"]
-    params: list = [match]
+    Один код для выдачи, счётчика и подсчёта по категориям — иначе
+    «найдено», показанное и цифры в боковой панели разойдутся.
+    """
+    filters = filters or Filters()
+    where: list[str] = []
+    params: list = []
+
+    match = build_match_query(query) if query and query.strip() else ""
+    if match:
+        source = WITH_QUERY
+        where.append("doc_fts MATCH ?")
+        params.append(match)
+    else:
+        source = WITHOUT_QUERY
+
     if filters.ext:
         where.append("d.ext = ?")
         params.append(filters.ext.lower())
@@ -71,13 +91,23 @@ def _conditions(query: str, filters: Filters) -> tuple[str, list] | None:
         # по части названия: «маренго» должно находить «ООО «КБ Маренго»»
         where.append("ru_lower(d.counterparty) LIKE ?")
         params.append(f"%{filters.counterparty.lower()}%")
+    if filters.year:
+        where.append("substr(d.doc_date, 1, 4) = ?")
+        params.append(str(filters.year))
     if filters.date_from:
         where.append("d.doc_date >= ?")
         params.append(filters.date_from)
     if filters.date_to:
         where.append("d.doc_date <= ?")
         params.append(filters.date_to)
-    return " AND ".join(where), params
+
+    return source, " AND ".join(where) if where else "1 = 1", params
+
+
+def has_criteria(query: str, filters: Filters | None = None) -> bool:
+    """Есть ли вообще что отбирать: пустой запрос без фильтров — не поиск."""
+    source, where, _ = conditions(query, filters)
+    return not (source == WITHOUT_QUERY and where == "1 = 1")
 
 
 def search(
@@ -87,28 +117,32 @@ def search(
     limit: int = 20,
     offset: int = 0,
 ) -> list[dict]:
-    conditions = _conditions(query, filters or Filters())
-    if conditions is None:
+    if not has_criteria(query, filters):
         return []
-    where, params = conditions
+    source, where, params = conditions(query, filters)
+
+    if source == WITH_QUERY:
+        order = f"bm25(doc_fts, {BM25_WEIGHTS})"
+        extra = f", doc_fts.body AS body, {order} AS score"
+    else:
+        # без поискового запроса ранжировать нечем — свежее идёт первым
+        order = "d.doc_date DESC, d.name"
+        extra = ""
 
     sql = f"""
-        SELECT d.id, d.path, d.rel_path, d.name, d.ext, d.size, d.root,
-               d.doc_type, d.doc_number, d.doc_date, d.counterparty,
-               d.object_code, d.status, d.needs_ocr,
-               doc_fts.body AS body,
-               bm25(doc_fts, {BM25_WEIGHTS}) AS score
-        FROM doc_fts
-        JOIN documents d ON d.id = doc_fts.rowid
+        SELECT {FIELDS}{extra}
+        FROM {source}
         WHERE {where}
-        ORDER BY score
+        ORDER BY {order}
         LIMIT ? OFFSET ?
     """
     rows = []
     for record in conn.execute(sql, params + [limit, offset]):
         row = dict(record)
         # сниппет считаем сами: FTS5 показал бы совпадение в колонке лемм
-        row["snippet"] = snippet_mod.make(row.pop("body") or "", query)
+        body = row.pop("body", None)
+        row["snippet"] = snippet_mod.make(body or "", query) if body else ""
+        row.pop("score", None)
         rows.append(row)
     return rows
 
@@ -116,13 +150,10 @@ def search(
 def count(conn: sqlite3.Connection, query: str,
           filters: Filters | None = None) -> int:
     """Сколько всего документов подходит — с учётом тех же фильтров."""
-    conditions = _conditions(query, filters or Filters())
-    if conditions is None:
+    if not has_criteria(query, filters):
         return 0
-    where, params = conditions
+    source, where, params = conditions(query, filters)
     row = conn.execute(
-        f"SELECT COUNT(*) c FROM doc_fts JOIN documents d ON d.id = doc_fts.rowid"
-        f" WHERE {where}",
-        params,
+        f"SELECT COUNT(*) c FROM {source} WHERE {where}", params
     ).fetchone()
     return row["c"]

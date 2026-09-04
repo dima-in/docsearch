@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Поиск по архиву документов</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --line: #dcdfe4;
+    --text: #1c1f23;
+    --muted: #6b7280;
+    --accent: #1b5e9e;
+    --accent-soft: #e8f0f8;
+    --mark: #fff3bf;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    padding: 14px 24px; position: sticky; top: 0; z-index: 10;
+  }
+  .bar { display: flex; gap: 12px; align-items: center; max-width: 1400px; margin: 0 auto; }
+  .bar h1 { font-size: 17px; margin: 0; white-space: nowrap; font-weight: 600; }
+  .bar h1 span { color: var(--muted); font-weight: 400; font-size: 13px; }
+  #q {
+    flex: 1; padding: 10px 14px; font-size: 16px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  }
+  #q:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+  button {
+    font: inherit; cursor: pointer; border: 1px solid var(--line);
+    background: #fff; border-radius: 6px; padding: 6px 12px; color: var(--text);
+  }
+  button:hover { background: var(--accent-soft); border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { background: #17517f; }
+
+  main { display: flex; gap: 20px; max-width: 1400px; margin: 20px auto; padding: 0 24px; align-items: flex-start; }
+  aside { width: 300px; flex: none; }
+  .facet {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    margin-bottom: 14px; overflow: hidden;
+  }
+  .facet h2 {
+    margin: 0; padding: 10px 14px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--line);
+    background: #fafbfc;
+  }
+  .facet ul { list-style: none; margin: 0; padding: 6px; max-height: 320px; overflow-y: auto; }
+  .facet li { display: flex; }
+  .facet button {
+    flex: 1; display: flex; justify-content: space-between; gap: 8px;
+    border: none; background: none; text-align: left; padding: 5px 8px;
+    border-radius: 5px; font-size: 14px;
+  }
+  .facet button.on { background: var(--accent); color: #fff; }
+  .facet button.on b { color: #fff; }
+  .facet b { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .facet .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  section { flex: 1; min-width: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    background: var(--accent-soft); border: 1px solid #bcd4e8; color: var(--accent);
+    border-radius: 20px; padding: 4px 10px; font-size: 13px;
+  }
+  .summary { color: var(--muted); margin-bottom: 12px; font-size: 14px; }
+  .doc {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; margin-bottom: 10px;
+  }
+  .doc h3 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+  .meta .tag {
+    display: inline-block; background: var(--accent-soft); color: var(--accent);
+    border-radius: 4px; padding: 1px 7px; margin-right: 6px; font-size: 12px;
+  }
+  .meta .scan { background: #fdf0e3; color: #9a5b12; }
+  .path { color: var(--muted); font-size: 12px; word-break: break-all; margin-bottom: 6px; }
+  .snippet { font-size: 14px; margin-bottom: 10px; }
+  .snippet mark { background: var(--mark); padding: 0 1px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pager { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 18px 0; }
+  .empty { background: var(--panel); border: 1px dashed var(--line); border-radius: 8px;
+           padding: 40px; text-align: center; color: var(--muted); }
+  dialog {
+    border: 1px solid var(--line); border-radius: 10px; padding: 0;
+    max-width: 900px; width: 90%; max-height: 85vh;
+  }
+  dialog header { position: static; display: flex; justify-content: space-between; gap: 12px; }
+  dialog pre {
+    margin: 0; padding: 18px 24px; white-space: pre-wrap; font: 14px/1.6 "Segoe UI", sans-serif;
+    overflow-y: auto; max-height: 65vh;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <h1>Архив документов <span id="total"></span></h1>
+    <input id="q" type="search" placeholder="Например: акт передачи документации фасад строй"
+           autocomplete="off" autofocus>
+    <button class="primary" id="go">Найти</button>
+    <button id="reset">Сбросить</button>
+  </div>
+</header>
+
+<main>
+  <aside id="facets"></aside>
+  <section>
+    <div class="chips" id="chips"></div>
+    <div class="summary" id="summary"></div>
+    <div id="results"></div>
+    <div class="pager" id="pager"></div>
+  </section>
+</main>
+
+<dialog id="viewer">
+  <header class="bar">
+    <h1 id="viewer-title"></h1>
+    <button onclick="document.getElementById('viewer').close()">Закрыть</button>
+  </header>
+  <pre id="viewer-text"></pre>
+</dialog>
+
+<script>
+const FACET_TITLES = {
+  type: "Категория документа",
+  org: "Организация",
+  year: "Год",
+  ext: "Формат файла",
+};
+const state = { q: "", type: "", org: "", year: "", ext: "", page: 1 };
+
+function escapeHtml(text) {
+  return (text || "").replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch]));
+}
+
+// подсветку в сниппете сервер помечает квадратными скобками
+function renderSnippet(text) {
+  return escapeHtml(text).replace(/\[([^\]]{1,80})\]/g, "<mark>$1</mark>");
+}
+
+function humanSize(bytes) {
+  const units = ["Б", "КБ", "МБ", "ГБ"];
+  let value = bytes || 0, i = 0;
+  while (value >= 1024 && i < units.length - 1) { value /= 1024; i++; }
+  return (i ? value.toFixed(1) : value) + " " + units[i];
+}
+
+function ruDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}.${m}.${y}`;
+}
+
+async function load() {
+  const params = new URLSearchParams();
+  for (const key of ["q", "type", "org", "year", "ext"]) {
+    if (state[key]) params.set(key, state[key]);
+  }
+  params.set("page", state.page);
+  const response = await fetch("/api/search?" + params);
+  const data = await response.json();
+  render(data);
+  history.replaceState(null, "", "?" + params);
+}
+
+function render(data) {
+  renderFacets(data.facets);
+  renderChips();
+
+  const results = document.getElementById("results");
+  const summary = document.getElementById("summary");
+
+  if (data.empty) {
+    summary.textContent = "";
+    results.innerHTML = `<div class="empty">Введите запрос или выберите категорию слева.<br>
+      В архиве ${data.total.toLocaleString("ru")} документов.</div>`;
+    document.getElementById("pager").innerHTML = "";
+    return;
+  }
+  if (!data.results.length) {
+    summary.textContent = "";
+    results.innerHTML = `<div class="empty">Ничего не найдено. Попробуйте меньше слов
+      или снимите часть фильтров.</div>`;
+    document.getElementById("pager").innerHTML = "";
+    return;
+  }
+
+  const from = (data.page - 1) * data.per_page + 1;
+  const to = from + data.results.length - 1;
+  summary.textContent = `Найдено ${data.total.toLocaleString("ru")}, показаны ${from}–${to}`;
+
+  results.innerHTML = data.results.map(doc => {
+    const tags = [];
+    if (doc.doc_type) tags.push(`<span class="tag">${escapeHtml(doc.doc_type)}</span>`);
+    if (doc.needs_ocr) tags.push(`<span class="tag scan">скан</span>`);
+    const facts = [
+      doc.doc_number ? "№ " + escapeHtml(doc.doc_number) : "",
+      ruDate(doc.doc_date),
+      escapeHtml(doc.counterparty || ""),
+      humanSize(doc.size),
+    ].filter(Boolean).join(" · ");
+    return `<article class="doc">
+      <h3>${escapeHtml(doc.name)}</h3>
+      <div class="meta">${tags.join("")}${facts}</div>
+      <div class="path">${escapeHtml(doc.root)} / ${escapeHtml(doc.rel_path)}</div>
+      ${doc.snippet ? `<div class="snippet">${renderSnippet(doc.snippet)}</div>` : ""}
+      <div class="actions">
+        <button onclick="window.open('/file/${doc.id}', '_blank')">Открыть</button>
+        <button onclick="window.location='/file/${doc.id}?download=1'">Скачать</button>
+        <button onclick="showText(${doc.id})">Текст документа</button>
+        <button onclick="copyPath(this, ${JSON.stringify(doc.path).replace(/"/g, "&quot;")})">Скопировать путь</button>
+      </div>
+    </article>`;
+  }).join("");
+
+  const pages = Math.ceil(data.total / data.per_page);
+  document.getElementById("pager").innerHTML = pages > 1 ? `
+    <button ${data.page <= 1 ? "disabled" : ""} onclick="turnPage(-1)">Назад</button>
+    <span>Страница ${data.page} из ${pages}</span>
+    <button ${data.page >= pages ? "disabled" : ""} onclick="turnPage(1)">Вперёд</button>` : "";
+}
+
+function renderFacets(facets) {
+  document.getElementById("facets").innerHTML = Object.entries(FACET_TITLES)
+    .filter(([key]) => (facets[key] || []).length)
+    .map(([key, title]) => `
+      <div class="facet">
+        <h2>${title}</h2>
+        <ul>${facets[key].map(item => `
+          <li><button class="${state[key] === item.value ? "on" : ""}"
+              onclick="toggleFacet('${key}', ${JSON.stringify(item.value).replace(/"/g, "&quot;")})">
+            <span class="name">${escapeHtml(item.value)}</span><b>${item.count}</b>
+          </button></li>`).join("")}</ul>
+      </div>`).join("");
+}
+
+function renderChips() {
+  const labels = [];
+  for (const [key, title] of Object.entries(FACET_TITLES)) {
+    if (state[key]) labels.push(`<span class="chip">${title}: ${escapeHtml(state[key])}</span>`);
+  }
+  document.getElementById("chips").innerHTML = labels.join("");
+}
+
+function toggleFacet(key, value) {
+  state[key] = state[key] === value ? "" : value;
+  state.page = 1;
+  load();
+}
+
+function turnPage(step) {
+  state.page += step;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  load();
+}
+
+async function showText(id) {
+  const data = await (await fetch("/api/doc/" + id)).json();
+  document.getElementById("viewer-title").textContent = data.name;
+  document.getElementById("viewer-text").textContent =
+    data.text || "Текст не извлечён — документ найден по имени файла и пути.";
+  document.getElementById("viewer").showModal();
+}
+
+function copyPath(button, path) {
+  navigator.clipboard.writeText(path).then(() => {
+    const was = button.textContent;
+    button.textContent = "Скопировано";
+    setTimeout(() => { button.textContent = was; }, 1500);
+  });
+}
+
+document.getElementById("go").onclick = () => {
+  state.q = document.getElementById("q").value;
+  state.page = 1;
+  load();
+};
+document.getElementById("q").addEventListener("keydown", event => {
+  if (event.key === "Enter") document.getElementById("go").click();
+});
+document.getElementById("reset").onclick = () => {
+  Object.assign(state, { q: "", type: "", org: "", year: "", ext: "", page: 1 });
+  document.getElementById("q").value = "";
+  load();
+};
+
+// состояние живёт в адресной строке: ссылку на выборку можно переслать
+const initial = new URLSearchParams(location.search);
+for (const key of ["q", "type", "org", "year", "ext"]) {
+  if (initial.get(key)) state[key] = initial.get(key);
+}
+state.page = parseInt(initial.get("page") || "1", 10);
+document.getElementById("q").value = state.q;
+
+fetch("/api/stats").then(r => r.json()).then(stats => {
+  document.getElementById("total").textContent =
+    "— " + stats.total.toLocaleString("ru") + " документов";
+});
+load();
+</script>
+</body>
+</html>

@@ -371,3 +371,30 @@ def error_paths(conn: sqlite3.Connection, root: str) -> set[str]:
             (root,),
         )
     }
+
+
+FACET_FIELDS = {
+    "type": "d.doc_type",
+    "org": "d.counterparty",
+    "year": "substr(d.doc_date, 1, 4)",
+    "ext": "d.ext",
+}
+
+
+def facets(conn: sqlite3.Connection, source: str, where: str, params: list,
+           limit: int = 40) -> dict:
+    """Сколько документов в каждой категории при текущем отборе.
+
+    Считается по тем же условиям, что и выдача: иначе в панели окажутся
+    значения, по которым ничего не найдётся.
+    """
+    result: dict[str, list] = {}
+    for name, column in FACET_FIELDS.items():
+        rows = conn.execute(
+            f"SELECT {column} AS value, COUNT(*) c FROM {source}"
+            f" WHERE {where} AND {column} IS NOT NULL AND {column} != ''"
+            f" GROUP BY ru_lower({column}) ORDER BY c DESC LIMIT ?",
+            params + [limit],
+        )
+        result[name] = [{"value": r["value"], "count": r["c"]} for r in rows]
+    return result

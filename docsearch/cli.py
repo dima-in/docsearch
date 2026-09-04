@@ -527,12 +527,51 @@ def cmd_shell(args) -> int:
 
 
 
+# ---------------------------------------------------------------------- serve
+
+def cmd_serve(args) -> int:
+    """Поднять веб-интерфейс: остальные открывают его по ссылке в браузере."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+    total = db.stats(conn)["total"]
+    conn.close()
+    if not total:
+        print("Индекс пуст — сначала docsearch index")
+        return 1
+
+    try:
+        import uvicorn
+        from .web import create_app
+    except ImportError:
+        print("Неуспех: не установлены fastapi и uvicorn "
+              "(pip install fastapi uvicorn)")
+        return 1
+
+    print(f"Документов в индексе: {total}")
+    print(f"Открывайте в браузере: http://{args.announce}:{args.port}/")
+    if args.host == "0.0.0.0":
+        print("Коллеги открывают тот же адрес — ставить им ничего не нужно")
+    print("Остановить — Ctrl+C")
+    uvicorn.run(create_app(cfg), host=args.host, port=args.port,
+                log_level="warning")
+    return 0
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
     )
     p.add_argument("-c", "--config", default=None, help="путь к config.yaml")
     sub = p.add_subparsers(dest="command", required=True)
+
+    s = sub.add_parser("serve", help="веб-интерфейс для поиска в браузере")
+    s.add_argument("--host", default="0.0.0.0",
+                   help="0.0.0.0 — доступно коллегам, 127.0.0.1 — только себе")
+    s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--announce", default="localhost",
+                   help="адрес, который показать в подсказке")
+    s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("shell", help="интерактивный поиск, запрос за запросом")
     s.add_argument("-n", "--limit", type=int, default=10)
