@@ -44,6 +44,28 @@ def _fix_console() -> None:
         pass
 
 
+def _addresses(announce: str | None, host: str) -> list[str]:
+    """Адреса, по которым откроется приложение.
+
+    Автоматически выбрать «тот самый» нельзя: на рабочей машине рядом с
+    сетевой картой живут VPN-туннели и виртуальные адаптеры, и угадывать
+    за пользователя хуже, чем показать всё и дать выбрать.
+    """
+    import socket
+
+    if announce:
+        return [announce]
+    found = ["localhost"]
+    if host == "0.0.0.0":
+        try:
+            for address in socket.gethostbyname_ex(socket.gethostname())[2]:
+                if address not in found and not address.startswith("127."):
+                    found.append(address)
+        except OSError:
+            pass
+    return found
+
+
 def _stamp() -> str:
     """Время для лога: ночной прогон читают утром, и «когда» важно."""
     return datetime.now().strftime("%d.%m %H:%M")
@@ -549,9 +571,15 @@ def cmd_serve(args) -> int:
         return 1
 
     print(f"Документов в индексе: {total}")
-    print(f"Открывайте в браузере: http://{args.announce}:{args.port}/")
+    print()
+    print("Открывайте в браузере:")
+    for address in _addresses(args.announce, args.host):
+        print(f"  http://{address}:{args.port}/")
     if args.host == "0.0.0.0":
-        print("Коллеги открывают тот же адрес — ставить им ничего не нужно")
+        print()
+        print("Коллегам дайте адрес, начинающийся с 192.168 — ставить им"
+              " ничего не нужно")
+    print()
     print("Остановить — Ctrl+C")
     uvicorn.run(create_app(cfg), host=args.host, port=args.port,
                 log_level="warning")
@@ -598,8 +626,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default="0.0.0.0",
                    help="0.0.0.0 — доступно коллегам, 127.0.0.1 — только себе")
     s.add_argument("--port", type=int, default=8000)
-    s.add_argument("--announce", default="localhost",
-                   help="адрес, который показать в подсказке")
+    s.add_argument("--announce", default=None,
+                   help="показать в подсказке только этот адрес")
     s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("shell", help="интерактивный поиск, запрос за запросом")
