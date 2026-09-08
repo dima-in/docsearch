@@ -93,6 +93,15 @@
     max-width: 900px; width: 90%; max-height: 85vh;
   }
   dialog header { position: static; display: flex; justify-content: space-between; gap: 12px; }
+  .card-form { padding: 18px 24px; display: grid; grid-template-columns: 150px 1fr; gap: 10px 14px; align-items: center; }
+  .card-form label { color: var(--muted); font-size: 14px; }
+  .card-form input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px; font: inherit; width: 100%; }
+  .card-form input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+  .card-form .row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+  .card-form .hint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
+  .edited { background: #eaf7ec; color: #1c6b2c; border-radius: 4px; padding: 1px 7px; font-size: 12px; }
+  .notice { background: #fff8e1; border: 1px solid #f0dda0; border-radius: 8px;
+            padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
   dialog pre {
     margin: 0; padding: 18px 24px; white-space: pre-wrap; font: 14px/1.6 "Segoe UI", sans-serif;
     overflow-y: auto; max-height: 65vh;
@@ -108,12 +117,15 @@
            autocomplete="off" autofocus>
     <button class="primary" id="go">Найти</button>
     <button id="reset">Сбросить</button>
+    <button id="recent">Новые</button>
+    <button id="refresh" title="Обойти папку и добавить появившиеся файлы">Проверить папку</button>
   </div>
 </header>
 
 <main>
   <aside id="facets"></aside>
   <section>
+    <div class="notice" id="notice" style="display:none"></div>
     <div class="chips" id="chips"></div>
     <div class="summary" id="summary"></div>
     <div id="results"></div>
@@ -126,7 +138,24 @@
     <h1 id="viewer-title"></h1>
     <button onclick="document.getElementById('viewer').close()">Закрыть</button>
   </header>
+  <div class="card-form">
+    <label for="f-type">Категория</label><input id="f-type" list="types">
+    <label for="f-number">Номер</label><input id="f-number">
+    <label for="f-date">Дата</label><input id="f-date" type="date">
+    <label for="f-org">Организация</label><input id="f-org" list="orgs">
+    <label for="f-object">Шифр объекта</label><input id="f-object">
+    <label for="f-note">Заметка</label><input id="f-note" placeholder="чем этот документ важен">
+    <div class="row">
+      <button class="primary" id="card-save">Сохранить</button>
+      <button id="card-auto">Вернуть автоматические</button>
+      <span id="card-status"></span>
+    </div>
+    <div class="hint">Ручная правка сильнее автоматического разбора и не
+      теряется при обновлении индекса.</div>
+  </div>
   <pre id="viewer-text"></pre>
+  <datalist id="types"></datalist>
+  <datalist id="orgs"></datalist>
 </dialog>
 
 <script>
@@ -137,6 +166,7 @@ const FACET_TITLES = {
   ext: "Формат файла",
 };
 const state = { q: "", type: "", org: "", year: "", ext: "", page: 1 };
+let lastFacets = { type: [], org: [], year: [], ext: [] };
 
 function escapeHtml(text) {
   return (text || "").replace(/[&<>"']/g, ch => ({
@@ -218,7 +248,7 @@ function render(data) {
       <div class="actions">
         <button onclick="window.open('/file/${doc.id}', '_blank')">Открыть</button>
         <button onclick="window.location='/file/${doc.id}?download=1'">Скачать</button>
-        <button onclick="showText(${doc.id})">Текст документа</button>
+        <button onclick="openCard(${doc.id})">Карточка и текст</button>
         <button onclick="copyPath(this, ${JSON.stringify(doc.path).replace(/"/g, "&quot;")})">Скопировать путь</button>
       </div>
     </article>`;
@@ -232,6 +262,7 @@ function render(data) {
 }
 
 function renderFacets(facets) {
+  lastFacets = facets;
   document.getElementById("facets").innerHTML = Object.entries(FACET_TITLES)
     .filter(([key]) => (facets[key] || []).length)
     .map(([key, title]) => `
@@ -265,13 +296,144 @@ function turnPage(step) {
   load();
 }
 
-async function showText(id) {
+let currentDoc = null;
+
+async function openCard(id) {
   const data = await (await fetch("/api/doc/" + id)).json();
+  currentDoc = data;
   document.getElementById("viewer-title").textContent = data.name;
+  document.getElementById("f-type").value = data.doc_type || "";
+  document.getElementById("f-number").value = data.doc_number || "";
+  document.getElementById("f-date").value = data.doc_date || "";
+  document.getElementById("f-org").value = data.counterparty || "";
+  document.getElementById("f-object").value = data.object_code || "";
+  document.getElementById("f-note").value = "";
+  document.getElementById("card-status").textContent = "";
   document.getElementById("viewer-text").textContent =
     data.text || "Текст не извлечён — документ найден по имени файла и пути.";
+  fillSuggestions();
   document.getElementById("viewer").showModal();
 }
+
+// подсказки берём из панели категорий: там уже собраны реальные значения
+function fillSuggestions() {
+  const options = (list, values) =>
+    list.innerHTML = values.map(v => `<option value="${escapeHtml(v)}">`).join("");
+  options(document.getElementById("types"), lastFacets.type.map(i => i.value));
+  options(document.getElementById("orgs"), lastFacets.org.map(i => i.value));
+}
+
+async function saveCard() {
+  if (!currentDoc) return;
+  const body = {
+    doc_type: document.getElementById("f-type").value.trim(),
+    doc_number: document.getElementById("f-number").value.trim(),
+    doc_date: document.getElementById("f-date").value.trim(),
+    counterparty: document.getElementById("f-org").value.trim(),
+    object_code: document.getElementById("f-object").value.trim(),
+    note: document.getElementById("f-note").value.trim(),
+  };
+  const status = document.getElementById("card-status");
+  status.textContent = "Сохраняю…";
+  const response = await fetch("/api/doc/" + currentDoc.id, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response.ok) {
+    status.innerHTML = '<span class="edited">Сохранено</span>';
+    load();
+  } else {
+    status.textContent = "Не удалось сохранить";
+  }
+}
+
+async function resetCard() {
+  if (!currentDoc) return;
+  const status = document.getElementById("card-status");
+  status.textContent = "Возвращаю…";
+  const response = await fetch("/api/doc/" + currentDoc.id + "/override",
+                              { method: "DELETE" });
+  if (response.ok) {
+    const fresh = await response.json();
+    currentDoc = { ...currentDoc, ...fresh };
+    document.getElementById("f-type").value = fresh.doc_type || "";
+    document.getElementById("f-number").value = fresh.doc_number || "";
+    document.getElementById("f-date").value = fresh.doc_date || "";
+    document.getElementById("f-org").value = fresh.counterparty || "";
+    document.getElementById("f-object").value = fresh.object_code || "";
+    status.textContent = "Возвращены автоматические значения";
+    load();
+  } else {
+    status.textContent = "Не удалось";
+  }
+}
+
+async function refreshArchive() {
+  const button = document.getElementById("refresh");
+  const was = button.textContent;
+  button.disabled = true;
+  button.textContent = "Проверяю папку…";
+  try {
+    const response = await fetch("/api/refresh", { method: "POST" });
+    if (!response.ok) throw new Error(await response.text());
+    const r = await response.json();
+    const parts = [];
+    if (r.added) parts.push(`новых ${r.added}`);
+    if (r.updated) parts.push(`обновлено ${r.updated}`);
+    if (r.removed) parts.push(`удалено ${r.removed}`);
+    notice(parts.length
+      ? `Проверено ${r.scanned} файлов за ${r.seconds} с: ${parts.join(", ")}.
+         Нажмите «Новые», чтобы проверить их атрибуты.`
+      : `Проверено ${r.scanned} файлов за ${r.seconds} с — изменений нет.`);
+    if (r.added) showRecent();
+  } catch (error) {
+    notice("Не удалось обойти папку: " + error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = was;
+  }
+}
+
+function notice(text) {
+  const box = document.getElementById("notice");
+  box.textContent = text;
+  box.style.display = "block";
+}
+
+async function showRecent() {
+  const data = await (await fetch("/api/recent?limit=50")).json();
+  document.getElementById("chips").innerHTML =
+    '<span class="chip">Недавно добавленные</span>';
+  document.getElementById("summary").textContent =
+    "Проверьте атрибуты: у новых документов они разобраны машиной";
+  document.getElementById("pager").innerHTML = "";
+  document.getElementById("results").innerHTML = data.results.map(doc => {
+    const tags = [];
+    if (doc.doc_type) tags.push(`<span class="tag">${escapeHtml(doc.doc_type)}</span>`);
+    if (doc.needs_ocr) tags.push(`<span class="tag scan">скан</span>`);
+    if (doc.edited) tags.push(`<span class="edited">проверено</span> `);
+    const facts = [
+      doc.doc_number ? "№ " + escapeHtml(doc.doc_number) : "",
+      ruDate(doc.doc_date),
+      escapeHtml(doc.counterparty || ""),
+    ].filter(Boolean).join(" · ") || "атрибуты не определены";
+    return `<article class="doc">
+      <h3>${escapeHtml(doc.name)}</h3>
+      <div class="meta">${tags.join("")}${facts}</div>
+      <div class="path">${escapeHtml(doc.root)} / ${escapeHtml(doc.rel_path)}</div>
+      <div class="actions">
+        <button class="primary" onclick="openCard(${doc.id})">Проверить атрибуты</button>
+        <button onclick="window.open('/file/${doc.id}', '_blank')">Открыть</button>
+      </div>
+    </article>`;
+  }).join("");
+}
+
+document.getElementById("card-save").onclick = saveCard;
+document.getElementById("card-auto").onclick = resetCard;
+document.getElementById("refresh").onclick = refreshArchive;
+document.getElementById("recent").onclick = showRecent;
 
 function copyPath(button, path) {
   navigator.clipboard.writeText(path).then(() => {

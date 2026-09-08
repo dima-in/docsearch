@@ -13,10 +13,10 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from . import db
+from . import db, indexer
 from . import search as search_mod
 from .config import Config
 
@@ -123,6 +123,69 @@ def create_app(cfg: Config) -> FastAPI:
             else "inline"
         return FileResponse(path, media_type=media, filename=path.name,
                             content_disposition_type=disposition)
+
+    @app.patch("/api/doc/{doc_id}")
+    def api_edit(doc_id: int, values: dict = Body(...)) -> JSONResponse:
+        """Ручная правка атрибутов. Она сильнее автоматического разбора и
+        переживает переиндексацию: хранится отдельно, по пути файла."""
+        conn = connect()
+        try:
+            card = db.card(conn, doc_id)
+            if not card:
+                raise HTTPException(404, "Документа нет в индексе")
+            author = values.pop("edited_by", None)
+            saved = db.set_override(conn, card["path"], values, author)
+            if not saved:
+                raise HTTPException(400, "Нечего сохранять")
+            return JSONResponse(db.card(conn, doc_id))
+        finally:
+            conn.close()
+
+    @app.delete("/api/doc/{doc_id}/override")
+    def api_clear_override(doc_id: int) -> JSONResponse:
+        """Снять ручную правку — атрибуты вернутся к разобранным."""
+        conn = connect()
+        try:
+            card = db.card(conn, doc_id)
+            if not card:
+                raise HTTPException(404, "Документа нет в индексе")
+            db.clear_override(conn, card["path"])
+            indexer.reparse_one(conn, cfg, doc_id)
+            return JSONResponse(db.card(conn, doc_id))
+        finally:
+            conn.close()
+
+    @app.post("/api/refresh")
+    def api_refresh() -> JSONResponse:
+        """Проверить папку на новые и изменившиеся файлы.
+
+        Обход инкрементальный: неизменившееся не перечитывается, поэтому
+        по большому архиву это минуты, а не час.
+        """
+        conn = connect()
+        try:
+            stats = indexer.run(conn, cfg)
+            return JSONResponse({
+                "scanned": stats.scanned,
+                "added": stats.added,
+                "updated": stats.updated,
+                "removed": stats.removed,
+                "needs_ocr": stats.needs_ocr,
+                "seconds": round(stats.seconds),
+            })
+        except FileNotFoundError as exc:
+            raise HTTPException(503, f"Папка недоступна: {exc}")
+        finally:
+            conn.close()
+
+    @app.get("/api/recent")
+    def api_recent(limit: int = Query(50, ge=1, le=200)) -> JSONResponse:
+        """Недавно добавленные документы — очередь на проверку атрибутов."""
+        conn = connect()
+        try:
+            return JSONResponse({"results": db.recent(conn, limit)})
+        finally:
+            conn.close()
 
     @app.get("/api/stats")
     def api_stats() -> JSONResponse:

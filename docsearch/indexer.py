@@ -40,6 +40,7 @@ def index_root(
 ) -> None:
     known = db.fingerprints(conn, label)
     retry = db.error_paths(conn, label) if retry_errors else set()
+    overrides = db.overrides_map(conn)
     seen: set[str] = set()
     pending = 0
 
@@ -78,6 +79,8 @@ def index_root(
         attrs = meta.guess(path, rel_path, text, cfg.own_org)
         attrs.update({k: v for k, v in result.meta.items() if v})
         attrs.pop("organizations", None)   # в карточку идёт только контрагент
+        # правка человека сильнее любого автоматического разбора
+        attrs = db.apply_override(attrs, overrides.get(key, {}))
 
         doc = {
             "path": key,
@@ -118,6 +121,7 @@ def index_root(
 
 def run(conn: sqlite3.Connection, cfg: Config, progress=None,
         force: bool = False, retry_errors: bool = False) -> IndexStats:
+    meta.set_aliases(cfg.org_aliases)
     stats = IndexStats()
     started = time.monotonic()
     for root in cfg.roots:
@@ -140,6 +144,8 @@ def reparse(conn: sqlite3.Connection, cfg: Config, progress=None) -> dict:
     распознанных сканов. Здесь файлы не открываются вообще: текст уже
     лежит в индексе, меняются только тип, номер, дата, контрагент и шифр.
     """
+    meta.set_aliases(cfg.org_aliases)
+    overrides = db.overrides_map(conn)
     changed = 0
     seen = 0
     rows = conn.execute(
@@ -154,6 +160,7 @@ def reparse(conn: sqlite3.Connection, cfg: Config, progress=None) -> dict:
         attrs = meta.guess(Path(row["path"]), row["rel_path"],
                            row["body"] or "", cfg.own_org)
         attrs.pop("organizations", None)
+        attrs = db.apply_override(attrs, overrides.get(row["path"], {}))
         fields = ("doc_type", "doc_number", "doc_date", "counterparty",
                   "object_code")
         if all(attrs.get(f) == row[f] for f in fields):
@@ -171,3 +178,26 @@ def reparse(conn: sqlite3.Connection, cfg: Config, progress=None) -> dict:
 
     conn.commit()
     return {"seen": seen, "changed": changed}
+
+
+def reparse_one(conn: sqlite3.Connection, cfg: Config, doc_id: int) -> None:
+    """Пересчитать атрибуты одного документа по сохранённому тексту."""
+    meta.set_aliases(cfg.org_aliases)
+    row = conn.execute(
+        "SELECT d.path, d.rel_path,"
+        " (SELECT body FROM doc_fts WHERE rowid = d.id) AS body"
+        " FROM documents d WHERE d.id = ?",
+        (doc_id,),
+    ).fetchone()
+    if not row:
+        return
+    attrs = meta.guess(Path(row["path"]), row["rel_path"], row["body"] or "",
+                       cfg.own_org)
+    attrs.pop("organizations", None)
+    conn.execute(
+        "UPDATE documents SET doc_type=?, doc_number=?, doc_date=?,"
+        " counterparty=?, object_code=? WHERE id=?",
+        (attrs.get("doc_type"), attrs.get("doc_number"), attrs.get("doc_date"),
+         attrs.get("counterparty"), attrs.get("object_code"), doc_id),
+    )
+    conn.commit()

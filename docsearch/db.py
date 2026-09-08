@@ -43,6 +43,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
     tokenize = "unicode61 remove_diacritics 2"
 );
 
+-- Ручные правки атрибутов. Ключ — путь, а не номер документа: номера
+-- меняются при пересоздании индекса, а правка человека переживать это
+-- обязана. Автоматический разбор никогда не затирает эти значения.
+CREATE TABLE IF NOT EXISTS overrides (
+    path         TEXT PRIMARY KEY,
+    doc_type     TEXT,
+    doc_number   TEXT,
+    doc_date     TEXT,
+    counterparty TEXT,
+    object_code  TEXT,
+    note         TEXT,
+    edited_at    REAL,
+    edited_by    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -407,3 +422,94 @@ def facets(conn: sqlite3.Connection, source: str, where: str, params: list,
         )
         result[name] = [{"value": r["value"], "count": r["c"]} for r in rows]
     return result
+
+
+OVERRIDE_FIELDS = ("doc_type", "doc_number", "doc_date", "counterparty",
+                   "object_code", "note")
+
+
+def get_override(conn: sqlite3.Connection, path: str) -> dict:
+    row = conn.execute(
+        "SELECT * FROM overrides WHERE path = ?", (path,)
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def overrides_map(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Все правки разом — для пересчёта, чтобы не спрашивать по одной."""
+    return {r["path"]: dict(r) for r in conn.execute("SELECT * FROM overrides")}
+
+
+def apply_override(attrs: dict, override: dict) -> dict:
+    """Наложить ручные значения поверх разобранных автоматически.
+
+    Пустая строка означает «человек намеренно очистил поле», поэтому
+    отличается от отсутствия правки.
+    """
+    if not override:
+        return attrs
+    result = dict(attrs)
+    for field_name in OVERRIDE_FIELDS:
+        value = override.get(field_name)
+        if value is not None:
+            result[field_name] = value or None
+    return result
+
+
+def set_override(conn: sqlite3.Connection, path: str, values: dict,
+                 author: str | None = None) -> dict:
+    """Сохранить правку и сразу применить её к карточке документа."""
+    clean = {f: values[f] for f in OVERRIDE_FIELDS if f in values}
+    if not clean:
+        return {}
+
+    existing = get_override(conn, path)
+    merged = {f: existing.get(f) for f in OVERRIDE_FIELDS}
+    merged.update(clean)
+
+    conn.execute(
+        "INSERT INTO overrides (path, doc_type, doc_number, doc_date,"
+        " counterparty, object_code, note, edited_at, edited_by)"
+        " VALUES (?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(path) DO UPDATE SET doc_type=excluded.doc_type,"
+        " doc_number=excluded.doc_number, doc_date=excluded.doc_date,"
+        " counterparty=excluded.counterparty, object_code=excluded.object_code,"
+        " note=excluded.note, edited_at=excluded.edited_at,"
+        " edited_by=excluded.edited_by",
+        (path, merged["doc_type"], merged["doc_number"], merged["doc_date"],
+         merged["counterparty"], merged["object_code"], merged["note"],
+         time.time(), author),
+    )
+    conn.execute(
+        "UPDATE documents SET doc_type=?, doc_number=?, doc_date=?,"
+        " counterparty=?, object_code=? WHERE path=?",
+        (merged["doc_type"], merged["doc_number"], merged["doc_date"],
+         merged["counterparty"], merged["object_code"], path),
+    )
+    conn.commit()
+    return merged
+
+
+def clear_override(conn: sqlite3.Connection, path: str) -> bool:
+    """Убрать правку — атрибуты вернутся к автоматическим при пересчёте."""
+    cur = conn.execute("DELETE FROM overrides WHERE path = ?", (path,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def recent(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    """Недавно проиндексированные документы, свежие первыми.
+
+    Это очередь на проверку: у нового файла атрибуты разобраны машиной, и
+    человеку стоит на них взглянуть, пока он помнит, что это за документ.
+    """
+    rows = conn.execute(
+        "SELECT d.id, d.path, d.rel_path, d.name, d.ext, d.size, d.root,"
+        " d.doc_type, d.doc_number, d.doc_date, d.counterparty,"
+        " d.object_code, d.status, d.needs_ocr, d.indexed_at,"
+        " (o.path IS NOT NULL) AS edited"
+        " FROM documents d LEFT JOIN overrides o ON o.path = d.path"
+        " ORDER BY d.indexed_at DESC, d.id DESC LIMIT ?",
+        (limit,),
+    )
+    return [dict(r) for r in rows]

@@ -42,6 +42,7 @@ class Config:
     exclude_dirs: set[str] = field(default_factory=set)
     exclude_globs: list[str] = field(default_factory=list)
     own_org: str | None = None
+    org_aliases: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # служебные папки исключаются всегда, как бы ни собрали Config
@@ -84,5 +85,6 @@ def load(path: str | os.PathLike | None = None) -> Config:
         # сравниваем имена папок без учёта регистра
         exclude_dirs=set(idx.get("exclude_dirs", [])),
         own_org=idx.get("own_organization") or None,
+        org_aliases=idx.get("organization_aliases") or {},
         exclude_globs=list(idx.get("exclude_globs", [])),
     )

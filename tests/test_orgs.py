@@ -63,3 +63,28 @@ def test_typographic_dash_is_unified():
 
 def test_folder_without_org_marker_gives_nothing():
     assert meta.find_counterparty(chr(92).join(["Фото", "Гор", "снимок.jpg"])) is None
+
+
+def test_ocr_garbage_is_not_an_organization():
+    """OCR на сканах выдаёт кашу, и она попадала в отчёт первой строкой."""
+    assert meta.find_organizations("ООО " + chr(171) + chr(0x2c6) + "ls-"
+                                   + chr(0x2c8) + " O" + chr(0x141) + "zКТ"
+                                   + chr(187)) == []
+    assert meta.find_organizations("ООО " + chr(171) + chr(187)) == []
+    assert meta.find_organizations("ООО " + chr(171) + "12" + chr(187)) == []
+
+
+def test_spaces_around_dash_are_collapsed():
+    spaced = meta.find_organizations("ООО " + chr(171) + "АМАКС- СТРОЙ" + chr(187))
+    tight = meta.find_organizations("ООО " + chr(171) + "АМАКС-СТРОЙ" + chr(187))
+    assert spaced == tight
+
+
+def test_aliases_merge_spellings():
+    meta.set_aliases({"ООО " + chr(171) + "СКМ" + chr(187): ["СК М", "СКМ-Строй"]})
+    try:
+        for variant in ["ООО " + chr(171) + "СК М" + chr(187),
+                        "АО " + chr(171) + "СКМ-Строй" + chr(187)]:
+            assert meta.find_organizations(variant) == ["ООО " + chr(171) + "СКМ" + chr(187)]
+    finally:
+        meta.set_aliases({})

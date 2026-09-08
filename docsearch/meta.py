@@ -108,14 +108,58 @@ DASHES = {0x2010: "-", 0x2011: "-", 0x2012: "-", 0x2013: "-", 0x2014: "-",
           0x2212: "-"}
 
 
-def normalize_org(form: str, name: str) -> str:
+# В названии организации могут быть только буквы, цифры и обычная
+# пунктуация. Всё остальное — брак распознавания: «ООО «ˆls-ˈ OŁzКТ»»
+RE_ORG_ALLOWED = re.compile(r"^[А-Яа-яЁёA-Za-z0-9 .,&'\"()/№-]+$")
+RE_ORG_LETTER = re.compile(r"[А-Яа-яЁёA-Za-z]")
+RE_SPACED_DASH = re.compile(r"\s*-\s*")
+
+
+# Синонимы из конфига: варианты написания, которые правилами не свести.
+# «СКМ», «СК М», «СКМ-Строй» — одна организация, и решить это может
+# только человек, который знает, о ком речь
+_aliases: dict[str, str] = {}
+
+
+def alias_key(name: str) -> str:
+    """Ключ для сравнения названий: без регистра, пробелов и дефисов."""
+    return re.sub(r"[\s\-]+", "", name.lower())
+
+
+def set_aliases(mapping: dict[str, list[str]] | None) -> None:
+    """canonical -> [варианты] превращаем в вариант -> canonical."""
+    global _aliases
+    _aliases = {}
+    for canonical, variants in (mapping or {}).items():
+        for variant in list(variants) + [canonical]:
+            _aliases[alias_key(strip_form(variant))] = canonical
+
+
+def strip_form(value: str) -> str:
+    """Убрать форму собственности и кавычки: остаётся само название."""
+    value = RE_ORG.sub("", value).strip()
+    return value.strip(" «»\"'")
+
+
+def apply_alias(org: str) -> str:
+    return _aliases.get(alias_key(strip_form(org)), org)
+
+
+def normalize_org(form: str, name: str) -> str | None:
     """Привести к единому виду: ООО «Маренго».
 
-    Тире выравниваем: «ПД‐ПРОЕКТ» с типографским дефисом и «ПД-ПРОЕКТ» с
-    обычным — одна организация, а в отчёте выглядели как две.
+    Возвращает None, если название явно нечитаемое: на сканах OCR
+    регулярно выдаёт кашу, и такая «организация» попадает в отчёт первой
+    строкой, потому что сортировка по алфавиту ставит её раньше всех.
     """
     name = " ".join(name.translate(DASHES).split()).strip(" .,;:-")
-    return f"{form.upper()} «{name}»"
+    # «АМАКС- СТРОЙ» и «АМАКС-СТРОЙ» — одна организация
+    name = RE_SPACED_DASH.sub("-", name)
+    if len(name) < 2 or not RE_ORG_LETTER.search(name):
+        return None
+    if not RE_ORG_ALLOWED.match(name):
+        return None
+    return apply_alias(f"{form.upper()} «{name}»")
 
 
 def find_organizations(text: str, limit: int = 6) -> list[str]:
@@ -127,7 +171,7 @@ def find_organizations(text: str, limit: int = 6) -> list[str]:
     found: list[str] = []
     for match in RE_ORG_QUOTED.finditer(text):
         org = normalize_org(match.group(1), match.group(2))
-        if org not in found:
+        if org and org not in found:
             found.append(org)
     for match in RE_ORG_PLAIN.finditer(text):
         # «ООО КБ «Маренго»» уже разобран формой в кавычках — не плодим
@@ -140,7 +184,8 @@ def find_organizations(text: str, limit: int = 6) -> list[str]:
             continue
         org = normalize_org(match.group(1), name)
         # без кавычек название могло уже попасться в кавычках
-        if org not in found and not any(org.split("«")[1][:8] in f for f in found):
+        if org and org not in found and not any(
+                org.split("«")[1][:8] in f for f in found):
             found.append(org)
     return found[:limit]
 
