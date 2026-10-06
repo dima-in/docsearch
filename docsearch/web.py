@@ -201,11 +201,21 @@ def create_app(cfg: Config) -> FastAPI:
             return JSONResponse({
                 "number": letters.next_number(conn, head.number_prefix),
                 "date": date.today().isoformat(),
-                "recipients": letters.known_recipients(conn),
+                "recipients": letters.recipients(conn),
                 "signer_position": head.signer_position,
                 "signer_name": head.signer_name,
                 "letterhead": head.header_lines(),
             })
+        finally:
+            conn.close()
+
+    @app.post("/api/letter/contacts")
+    def api_rebuild_contacts() -> JSONResponse:
+        """Пересобрать справочник адресатов по переписке."""
+        conn = connect()
+        try:
+            rows = letters.rebuild_contacts(conn)
+            return JSONResponse({"found": len(rows)})
         finally:
             conn.close()
 
@@ -220,7 +230,7 @@ def create_app(cfg: Config) -> FastAPI:
         head = letters.Letterhead.from_config(cfg.letterhead)
         if not head.name:
             raise HTTPException(400, "В конфиге не заполнен раздел letterhead")
-        blob = letters.build_docx(letter, head)
+        blob = letters.render(letter, head)
         name = letters.file_name(letter)
         quoted = quote(name)
         return Response(

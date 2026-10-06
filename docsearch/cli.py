@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config as config_mod
-from . import db, extract, homoglyph, morph, ocr, scaffold, shell
+from . import db, extract, homoglyph, letters, morph, ocr, scaffold, shell
 from . import sniff, textnorm
 from . import search as search_mod
 from . import indexer
@@ -620,6 +620,42 @@ def cmd_reparse(args) -> int:
 
 
 
+# ------------------------------------------------------------------ contacts
+
+def cmd_contacts(args) -> int:
+    """Справочник адресатов из прошлых писем."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+    try:
+        if args.rebuild or not db.contacts(conn, limit=1):
+            print(f"[{_stamp()}] Задача: собрать адресатов по переписке")
+
+            def progress(seen, found):
+                if _interactive():
+                    print(f"  просмотрено {seen}, найдено {found}",
+                          end=chr(13), flush=True)
+
+            rows = letters.rebuild_contacts(conn, progress)
+            if _interactive():
+                print(" " * 70, end=chr(13))
+            print(f"[{_stamp()}] Сделал: адресатов {len(rows)}")
+
+        known = db.contacts(conn, limit=args.limit)
+        if not known:
+            print("Адресатов не нашлось — в индексе нет разобранной переписки")
+            return 1
+        print()
+        for item in known:
+            person = item["person"] or ""
+            print(f"  {item['org']}")
+            print(f"    {item['position'] or '—'}   {person}"
+                  f"   писем {item['letters']}")
+        return 0
+    finally:
+        conn.close()
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
@@ -634,6 +670,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--announce", default=None,
                    help="показать в подсказке только этот адрес")
     s.set_defaults(func=cmd_serve)
+
+    s = sub.add_parser("contacts", help="адресаты из прошлых писем")
+    s.add_argument("--rebuild", action="store_true", help="пересобрать заново")
+    s.add_argument("-n", "--limit", type=int, default=50)
+    s.set_defaults(func=cmd_contacts)
 
     s = sub.add_parser("shell", help="интерактивный поиск, запрос за запросом")
     s.add_argument("-n", "--limit", type=int, default=10)

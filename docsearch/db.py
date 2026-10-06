@@ -59,6 +59,16 @@ CREATE TABLE IF NOT EXISTS overrides (
     edited_by    TEXT
 );
 
+-- Справочник адресатов, собранный из прошлых писем: кому и как мы уже
+-- писали. Заводить его руками никто не станет, а в переписке он есть.
+CREATE TABLE IF NOT EXISTS contacts (
+    org       TEXT PRIMARY KEY,
+    position  TEXT,
+    person    TEXT,
+    letters   INTEGER NOT NULL DEFAULT 0,
+    last_date TEXT
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -536,3 +546,39 @@ def recent(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
         (limit,),
     )
     return [dict(r) for r in rows]
+
+
+def save_contacts(conn: sqlite3.Connection, rows: list[dict]) -> int:
+    conn.execute("DELETE FROM contacts")
+    conn.executemany(
+        "INSERT INTO contacts (org, position, person, letters, last_date)"
+        " VALUES (?,?,?,?,?)",
+        [(r["org"], r.get("position"), r.get("person"), r.get("letters", 0),
+          r.get("last_date")) for r in rows],
+    )
+    conn.commit()
+    return len(rows)
+
+
+def contacts(conn: sqlite3.Connection, limit: int = 300) -> list[dict]:
+    """Адресаты по алфавиту: в длинном списке ищут конкретного."""
+    return [
+        dict(r)
+        for r in conn.execute(
+            "SELECT org, position, person, letters, last_date FROM contacts"
+            " ORDER BY ru_lower(substr(org, instr(org, '«') + 1)) LIMIT ?",
+            (limit,),
+        )
+    ]
+
+
+def correspondence_bodies(conn: sqlite3.Connection, limit: int = 5000):
+    """Текст писем, свежие первыми — для сбора справочника адресатов."""
+    return conn.execute(
+        "SELECT d.counterparty, d.doc_date,"
+        " (SELECT body FROM doc_fts WHERE rowid = d.id) AS body"
+        " FROM documents d"
+        " WHERE (d.section = 'переписка' OR d.doc_type = 'письмо')"
+        " ORDER BY d.doc_date DESC LIMIT ?",
+        (limit,),
+    )

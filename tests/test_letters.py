@@ -101,7 +101,8 @@ def test_draft_endpoint(env):
     draft = client.get("/api/letter/draft").json()
     assert draft["number"] == "РТП-176"
     assert draft["signer_name"] == "Иноземцев Д. А."
-    assert "ООО «Маренго»" in draft["recipients"]
+    orgs = [item["org"] for item in draft["recipients"]]
+    assert "ООО «Маренго»" in orgs
 
 
 def test_build_endpoint_returns_docx(env):
@@ -140,3 +141,173 @@ def test_register_writes_exact_attributes(env):
     assert saved["doc_number"] == "РТП-176"
     assert saved["counterparty"] == "ООО «Маренго»"
     assert saved["section"] == "переписка"
+
+
+def make_template(path: Path) -> Path:
+    """Бланк для теста: своего в репозитории нет и быть не должно."""
+    import docx
+
+    document = docx.Document()
+    document.add_paragraph("ООО «Образец»")
+    table = document.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].paragraphs[0].text = "Исх. {{number}} от {{date}}"
+    right = table.rows[0].cells[1]
+    right.paragraphs[0].text = "{{recipient_position}}"
+    right.add_paragraph("{{recipient_org}}")
+    right.add_paragraph("{{recipient_person}}")
+    document.add_paragraph("Тема: «{{subject}}»")
+    document.add_paragraph("{{greeting}}")
+    document.add_paragraph("{{body}}")
+    document.add_paragraph("{{signer_position}}\t\t{{signer_name}}")
+    document.save(str(path))
+    return path
+
+
+def read_all(blob: bytes) -> list[str]:
+    import docx
+
+    document = docx.Document(BytesIO(blob))
+    lines = [p.text.strip() for p in document.paragraphs if p.text.strip()]
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                lines += [p.text.strip() for p in cell.paragraphs if p.text.strip()]
+    return lines
+
+
+def test_template_is_filled(tmp_path: Path):
+    template = make_template(tmp_path / "бланк.docx")
+    head = letters.Letterhead.from_config({**HEAD, "template": str(template)})
+    blob = letters.render({
+        "number": "РТП-1336", "date": "2026-10-07",
+        "recipient_position": "Генеральному директору",
+        "recipient_org": "ООО «Мосренстрой-6»",
+        "recipient_person": "Севрюкову Е. В.",
+        "subject": "Ответ на УКМ-300", "greeting": "Уважаемый Евгений Владимирович!",
+        "body": "Первый абзац.",
+    }, head)
+    lines = read_all(blob)
+    assert "Исх. РТП-1336 от 7 октября 2026 г." in lines
+    assert "ООО «Мосренстрой-6»" in lines
+    assert "Тема: «Ответ на УКМ-300»" in lines
+    assert "Первый абзац." in lines
+    assert not any("{{" in line for line in lines)
+
+
+def test_multiline_body_becomes_several_paragraphs(tmp_path: Path):
+    template = make_template(tmp_path / "бланк.docx")
+    head = letters.Letterhead.from_config({**HEAD, "template": str(template)})
+    blob = letters.render({"recipient_org": "ООО «Х»",
+                           "body": "Первый.\nВторой.\nТретий."}, head)
+    lines = read_all(blob)
+    for expected in ("Первый.", "Второй.", "Третий."):
+        assert expected in lines
+
+
+def test_signer_falls_back_to_letterhead(tmp_path: Path):
+    template = make_template(tmp_path / "бланк.docx")
+    head = letters.Letterhead.from_config({**HEAD, "template": str(template)})
+    lines = read_all(letters.render({"recipient_org": "ООО «Х»"}, head))
+    assert any("Иноземцев Д. А." in line for line in lines)
+
+
+def test_missing_fields_leave_no_placeholders(tmp_path: Path):
+    """Незаполненное поле должно исчезнуть, а не остаться скобками в письме."""
+    template = make_template(tmp_path / "бланк.docx")
+    head = letters.Letterhead.from_config({**HEAD, "template": str(template)})
+    lines = read_all(letters.render({"recipient_org": "ООО «Х»"}, head))
+    assert not any("{{" in line or "}}" in line for line in lines)
+
+
+def test_falls_back_when_template_missing(tmp_path: Path):
+    head = letters.Letterhead.from_config(
+        {**HEAD, "template": str(tmp_path / "нет.docx")})
+    lines = read_all(letters.render({"recipient_org": "ООО «Х»",
+                                     "body": "Текст."}, head))
+    assert "ООО «ФБ-СТРОЙ»" in lines     # программная вёрстка сработала
+
+
+def test_template_builder_marks_the_places(tmp_path: Path):
+    """Инструмент из tools/ размечает отправленное письмо в шаблон."""
+    import importlib.util
+
+    source = tmp_path / "письмо.docx"
+    import docx
+
+    document = docx.Document()
+    table = document.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].paragraphs[0].text = "Исх. РТП-1335 от 06.10.2026 г."
+    right = table.rows[0].cells[1]
+    right.paragraphs[0].text = "Генеральному директору"
+    right.add_paragraph("ООО «Мосренстрой-6»")
+    right.add_paragraph("Севрюкову Е.В.")
+    document.add_paragraph("Тема: «Ответ на письмо»")
+    document.add_paragraph("Уважаемый Евгений Владимирович!")
+    document.add_paragraph("Между сторонами заключен договор подряда.")
+    document.add_paragraph("Второй абзац письма.")
+    document.add_paragraph("С уважением,")
+    document.add_paragraph("Руководитель проекта\t\tСтерхов Д.А.")
+    document.save(str(source))
+
+    spec = importlib.util.spec_from_file_location(
+        "make_template",
+        Path(__file__).resolve().parent.parent / "tools" / "make_template.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    target = tmp_path / "шаблон.docx"
+    module.build(str(source), str(target))
+
+    result = docx.Document(str(target))
+    lines = [p.text.strip() for p in result.paragraphs if p.text.strip()]
+    assert "Тема: «{{subject}}»" in lines
+    assert "{{greeting}}" in lines
+    assert "{{body}}" in lines
+    assert "Второй абзац письма." not in lines     # содержание выброшено
+    assert any("{{signer_name}}" in line for line in lines)
+
+
+def test_addressee_parsed_from_letter_body():
+    """Блок «кому» в исходящем — это готовая карточка адресата."""
+    text = (chr(10).join([
+        "Исх. РТП-1335 от 06.10.2026 г.",
+        "Генеральному директору",
+        "ООО «Мосренстрой-6»",
+        "Севрюкову Е.В.",
+        "Тема: «Ответ»",
+    ]))
+    found = letters.parse_addressee(text)
+    assert found["position"] == "Генеральному директору"
+    assert found["org"] == "ООО «Мосренстрой-6»"
+    assert found["person"] == "Севрюкову Е.В."
+
+
+def test_addressee_absent():
+    assert letters.parse_addressee("Просто текст без адресата") is None
+    assert letters.parse_addressee("") is None
+
+
+def test_contacts_are_built_from_correspondence(env):
+    conn, cfg = env
+    conn.execute(
+        "UPDATE documents SET section = 'переписка', doc_type = 'письмо'")
+    conn.commit()
+    conn.execute(
+        "DELETE FROM doc_fts WHERE rowid = (SELECT MIN(id) FROM documents)")
+    doc_id = conn.execute("SELECT MIN(id) id FROM documents").fetchone()["id"]
+    body = chr(10).join(["Генеральному директору", "ООО «Маренго»",
+                         "Белякову А. В."])
+    conn.execute("INSERT INTO doc_fts (rowid, name, body, lemmas)"
+                 " VALUES (?,?,?,?)", (doc_id, "письмо", body, body))
+    conn.commit()
+
+    rows = letters.rebuild_contacts(conn)
+    found = {r["org"]: r for r in rows}
+    assert found["ООО «Маренго»"]["person"] == "Беляков А. В." or            found["ООО «Маренго»"]["person"] == "Белякову А. В."
+    assert found["ООО «Маренго»"]["position"] == "Генеральному директору"
+
+
+def test_contacts_endpoint(env):
+    conn, cfg = env
+    client = TestClient(create_app(cfg))
+    assert client.post("/api/letter/contacts").status_code == 200

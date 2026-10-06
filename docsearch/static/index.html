@@ -151,7 +151,7 @@
     <label for="l-date">Дата</label><input id="l-date" type="date">
     <label for="l-reference">На №</label><input id="l-reference" placeholder="ссылка на входящее, если есть">
     <label for="l-recipient-position">Кому, должность</label><input id="l-recipient-position" placeholder="Генеральному директору">
-    <label for="l-recipient-org">Организация</label><input id="l-recipient-org" list="recipients">
+    <label for="l-recipient-org">Организация</label><input id="l-recipient-org" list="recipients" placeholder="начните печатать — подставится из прошлых писем">
     <label for="l-recipient-person">Фамилия и инициалы</label><input id="l-recipient-person" placeholder="Белякову А. В.">
     <label for="l-subject">Тема</label><input id="l-subject">
     <label for="l-greeting">Обращение</label><input id="l-greeting" placeholder="Уважаемый Александр Вадимович!">
@@ -471,6 +471,8 @@ async function showRecent() {
 
 // ------------------------------------------------------------ новое письмо
 
+let knownRecipients = [];
+
 const LETTER_FIELDS = ["number", "date", "recipient_position", "recipient_org",
   "recipient_person", "subject", "reference", "greeting", "body",
   "signer_position", "signer_name"];
@@ -483,8 +485,12 @@ async function openLetter() {
   document.getElementById("l-signer-name").value = draft.signer_name || "";
   document.getElementById("letterhead").textContent =
     (draft.letterhead || []).join("\n") || "Бланк не заполнен в конфиге";
-  document.getElementById("recipients").innerHTML =
-    (draft.recipients || []).map(v => `<option value="${escapeHtml(v)}">`).join("");
+  // справочник адресатов: выбрал организацию — должность и фамилия сами
+  knownRecipients = draft.recipients || [];
+  document.getElementById("recipients").innerHTML = knownRecipients
+    .map(r => `<option value="${escapeHtml(r.org)}">` +
+              `${escapeHtml([r.position, r.person].filter(Boolean).join(", "))}</option>`)
+    .join("");
   document.getElementById("letter-status").textContent = "";
   document.getElementById("letter").showModal();
 }
@@ -539,6 +545,17 @@ async function buildLetter() {
   URL.revokeObjectURL(link.href);
   status.innerHTML = '<span class="edited">Готово, файл скачан</span>';
 }
+
+// подставляем должность и фамилию, но не затираем уже введённое руками
+document.getElementById("l-recipient-org").addEventListener("change", () => {
+  const chosen = knownRecipients.find(
+    r => r.org === document.getElementById("l-recipient-org").value);
+  if (!chosen) return;
+  const position = document.getElementById("l-recipient-position");
+  const person = document.getElementById("l-recipient-person");
+  if (!position.value && chosen.position) position.value = chosen.position;
+  if (!person.value && chosen.person) person.value = chosen.person;
+});
 
 document.getElementById("new-letter").onclick = openLetter;
 document.getElementById("letter-build").onclick = buildLetter;

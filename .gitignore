@@ -10,3 +10,4 @@ sample/
 *.egg-info/
 build/
 dist/
+templates/

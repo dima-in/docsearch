@@ -40,6 +40,7 @@ class Letterhead:
     signer_position: str = ""
     signer_name: str = ""
     number_prefix: str = ""
+    template: str = ""
     extra_lines: list = field(default_factory=list)
 
     @classmethod
@@ -56,6 +57,7 @@ class Letterhead:
             signer_position=raw.get("signer_position", ""),
             signer_name=raw.get("signer_name", ""),
             number_prefix=raw.get("number_prefix", ""),
+            template=raw.get("template", ""),
             extra_lines=list(raw.get("extra_lines", [])),
         )
 
@@ -239,3 +241,194 @@ def register(conn: sqlite3.Connection, path: str, letter: dict) -> None:
         "counterparty": letter.get("recipient_org"),
         "note": letter.get("subject"),
     }, author=letter.get("author"))
+
+
+# ---------------------------------------------------------------- шаблон
+
+PLACEHOLDER = re.compile(r"{{\s*(\w+)\s*}}")
+
+
+def _set_text(paragraph, text: str) -> None:
+    """Заменить текст абзаца, сохранив оформление.
+
+    Word дробит текст на прогоны где попало, поэтому заменять по месту
+    нельзя: подстановка может оказаться разрезанной пополам. Пишем всё в
+    первый прогон, остальные опустошаем — оформление берётся от первого.
+    """
+    runs = paragraph.runs
+    if not runs:
+        paragraph.add_run(text)
+        return
+    runs[0].text = text
+    for extra in runs[1:]:
+        extra.text = ""
+
+
+def _fill(paragraph, context: dict) -> None:
+    text = paragraph.text
+    if "{{" not in text:
+        return
+    filled = PLACEHOLDER.sub(lambda m: str(context.get(m.group(1), "") or ""),
+                             text)
+    _set_text(paragraph, filled)
+
+
+def _expand_body(paragraph, body: str) -> None:
+    """Многострочный текст письма — несколько абзацев с тем же оформлением."""
+    import copy
+
+    lines = [line.strip() for line in (body or "").split(chr(10))]
+    lines = [line for line in lines if line] or [""]
+
+    _set_text(paragraph, lines[0])
+    anchor = paragraph._element
+    for line in lines[1:]:
+        clone = copy.deepcopy(paragraph._element)
+        anchor.addnext(clone)
+        anchor = clone
+        from docx.text.paragraph import Paragraph
+
+        _set_text(Paragraph(clone, paragraph._parent), line)
+
+
+def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes:
+    """Заполнить бланк организации. Вёрстка, логотип и поля берутся из него."""
+    import docx
+    from docx.text.paragraph import Paragraph
+
+    document = docx.Document(template_path)
+    context = dict(letter)
+    context.setdefault("greeting", "Уважаемые коллеги!")
+    context["date"] = ru_date(letter.get("date"))
+    context.setdefault("signer_position", head.signer_position)
+    context.setdefault("signer_name", head.signer_name)
+    for key in ("signer_position", "signer_name"):
+        context[key] = context.get(key) or getattr(head, key)
+
+    body_text = context.pop("body", "")
+
+    def walk(parent):
+        for paragraph in parent.paragraphs:
+            if "{{body}}" in paragraph.text or "{{ body }}" in paragraph.text:
+                _expand_body(paragraph, body_text)
+            else:
+                _fill(paragraph, context)
+        for table in parent.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    walk(cell)
+
+    walk(document)
+
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def render(letter: dict, head: Letterhead) -> bytes:
+    """Письмо на бланке, если он задан, иначе простая программная вёрстка."""
+    from pathlib import Path
+
+    if head.template and Path(head.template).exists():
+        return render_template(head.template, letter, head)
+    return build_docx(letter, head)
+
+
+# ------------------------------------------------------- справочник адресатов
+
+# «Генеральному директору», «Начальнику ПТО», «Главному инженеру»
+RE_POSITION = re.compile(
+    r"^\s*(?:(?:Вр\.?\s*и\.?\s*о\.?|И\.?\s*о\.?)\s*)?"
+    r"(Генеральному|Исполнительному|Техническому|Финансовому|Коммерческому|"
+    r"Главному|Первому|Заместителю|Директору|Руководителю|Начальнику|"
+    r"Управляющему)\b.{0,60}$",
+    re.IGNORECASE,
+)
+
+# «Севрюкову Е.В.» — фамилия в дательном падеже и инициалы
+RE_PERSON = re.compile(
+    r"^\s*([А-ЯЁ][а-яё\-]{2,30})\s+([А-ЯЁ]\.\s?[А-ЯЁ]\.?)\s*$"
+)
+
+LOOKAHEAD = 4   # сколько строк просматривать вокруг должности
+
+
+def parse_addressee(text: str) -> dict | None:
+    """Вытащить блок «кому» из текста письма.
+
+    В исходящих он стоит справа сверху тремя строками: должность,
+    организация, фамилия с инициалами. Это и есть готовая карточка
+    адресата — заводить справочник руками не нужно.
+    """
+    from . import meta
+
+    lines = [line.strip() for line in (text or "")[:HEAD_LIMIT].split(chr(10))]
+    lines = [line for line in lines if line]
+
+    for i, line in enumerate(lines):
+        if not RE_POSITION.match(line):
+            continue
+        window = lines[i:i + LOOKAHEAD]
+        org = None
+        person = None
+        for candidate in window[1:]:
+            if org is None:
+                found = meta.find_organizations(candidate)
+                if found:
+                    org = found[0]
+                    continue
+            match = RE_PERSON.match(candidate)
+            if match:
+                person = f"{match.group(1)} {match.group(2)}"
+                break
+        if org:
+            return {"position": line, "org": org, "person": person}
+    return None
+
+
+HEAD_LIMIT = 1500
+
+
+def rebuild_contacts(conn, progress=None) -> list[dict]:
+    """Собрать справочник адресатов, пройдя по переписке.
+
+    Побеждает самое свежее письмо: должности меняются, и писать надо
+    тому, кто занимает её сейчас.
+    """
+    found: dict[str, dict] = {}
+    seen = 0
+    for row in db.correspondence_bodies(conn):
+        seen += 1
+        if progress and seen % 500 == 0:
+            progress(seen, len(found))
+        parsed = parse_addressee(row["body"] or "")
+        if not parsed:
+            continue
+        org = parsed["org"]
+        entry = found.setdefault(org, {
+            "org": org, "position": None, "person": None,
+            "letters": 0, "last_date": None,
+        })
+        entry["letters"] += 1
+        # письма идут от свежих к старым, поэтому первое и есть актуальное
+        if entry["position"] is None:
+            entry["position"] = parsed["position"]
+            entry["person"] = parsed["person"]
+            entry["last_date"] = row["doc_date"]
+
+    rows = sorted(found.values(), key=lambda e: -e["letters"])
+    db.save_contacts(conn, rows)
+    return rows
+
+
+def recipients(conn) -> list[dict]:
+    """Адресаты для формы письма. Если справочник пуст — собрать на месте."""
+    known = db.contacts(conn)
+    if not known:
+        rebuild_contacts(conn)
+        known = db.contacts(conn)
+    if known:
+        return known
+    # переписки ещё нет — предложим хотя бы контрагентов из архива
+    return [{"org": org, "position": None, "person": None, "letters": 0}
+            for org in known_recipients(conn)]
