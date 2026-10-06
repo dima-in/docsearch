@@ -96,6 +96,12 @@
   .card-form { padding: 18px 24px; display: grid; grid-template-columns: 150px 1fr; gap: 10px 14px; align-items: center; }
   .card-form label { color: var(--muted); font-size: 14px; }
   .card-form input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px; font: inherit; width: 100%; }
+  .card-form textarea { padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px;
+                        font: inherit; width: 100%; resize: vertical; }
+  .letterhead { margin: 0; padding: 14px 24px; background: #fafbfc;
+                border-bottom: 1px solid var(--line); font: 13px/1.5 "Segoe UI", sans-serif;
+                color: var(--muted); white-space: pre-wrap; }
+  .card-form textarea:focus,
   .card-form input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
   .card-form .row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
   .card-form .hint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
@@ -118,6 +124,7 @@
     <button class="primary" id="go">Найти</button>
     <button id="reset">Сбросить</button>
     <button id="recent">Новые</button>
+    <button id="new-letter" class="primary">Новое письмо</button>
     <button id="refresh" title="Обойти папку и добавить появившиеся файлы">Проверить папку</button>
   </div>
 </header>
@@ -132,6 +139,34 @@
     <div class="pager" id="pager"></div>
   </section>
 </main>
+
+<dialog id="letter">
+  <header class="bar">
+    <h1>Новое исходящее письмо</h1>
+    <button onclick="document.getElementById('letter').close()">Закрыть</button>
+  </header>
+  <pre id="letterhead" class="letterhead"></pre>
+  <div class="card-form">
+    <label for="l-number">Исх. №</label><input id="l-number">
+    <label for="l-date">Дата</label><input id="l-date" type="date">
+    <label for="l-reference">На №</label><input id="l-reference" placeholder="ссылка на входящее, если есть">
+    <label for="l-recipient-position">Кому, должность</label><input id="l-recipient-position" placeholder="Генеральному директору">
+    <label for="l-recipient-org">Организация</label><input id="l-recipient-org" list="recipients">
+    <label for="l-recipient-person">Фамилия и инициалы</label><input id="l-recipient-person" placeholder="Белякову А. В.">
+    <label for="l-subject">Тема</label><input id="l-subject">
+    <label for="l-greeting">Обращение</label><input id="l-greeting" placeholder="Уважаемый Александр Вадимович!">
+    <label for="l-body">Текст</label><textarea id="l-body" rows="8"></textarea>
+    <label for="l-signer-position">Подписант</label><input id="l-signer-position">
+    <label for="l-signer-name">ФИО подписанта</label><input id="l-signer-name">
+    <div class="row">
+      <button class="primary" id="letter-build">Сформировать .docx</button>
+      <span id="letter-status"></span>
+    </div>
+    <div class="hint">Файл скачивается — в архив ничего не пишется. Правьте в
+      Word, сохраняйте в нужную папку, обход подхватит его сам.</div>
+  </div>
+  <datalist id="recipients"></datalist>
+</dialog>
 
 <dialog id="viewer">
   <header class="bar">
@@ -160,13 +195,15 @@
 
 <script>
 const FACET_TITLES = {
+  section: "Раздел архива",
   type: "Категория документа",
   org: "Организация",
   year: "Год",
   ext: "Формат файла",
 };
-const state = { q: "", type: "", org: "", year: "", ext: "", page: 1 };
-let lastFacets = { type: [], org: [], year: [], ext: [] };
+const state = { q: "", section: "", type: "", org: "", year: "", ext: "", page: 1 };
+let lastFacets = { section: [], type: [], org: [], year: [], ext: [] };
+let lastResults = [];
 
 function escapeHtml(text) {
   return (text || "").replace(/[&<>"']/g, ch => ({
@@ -194,7 +231,7 @@ function ruDate(iso) {
 
 async function load() {
   const params = new URLSearchParams();
-  for (const key of ["q", "type", "org", "year", "ext"]) {
+  for (const key of ["q", "section", "type", "org", "year", "ext"]) {
     if (state[key]) params.set(key, state[key]);
   }
   params.set("page", state.page);
@@ -230,6 +267,7 @@ function render(data) {
   const to = from + data.results.length - 1;
   summary.textContent = `Найдено ${data.total.toLocaleString("ru")}, показаны ${from}–${to}`;
 
+  lastResults = data.results;
   results.innerHTML = data.results.map(doc => {
     const tags = [];
     if (doc.doc_type) tags.push(`<span class="tag">${escapeHtml(doc.doc_type)}</span>`);
@@ -249,6 +287,7 @@ function render(data) {
         <button onclick="window.open('/file/${doc.id}', '_blank')">Открыть</button>
         <button onclick="window.location='/file/${doc.id}?download=1'">Скачать</button>
         <button onclick="openCard(${doc.id})">Карточка и текст</button>
+        <button onclick="useAsReference(${doc.id})" title="Сослаться на это письмо в новом">Ответить</button>
         <button onclick="copyPath(this, ${JSON.stringify(doc.path).replace(/"/g, "&quot;")})">Скопировать путь</button>
       </div>
     </article>`;
@@ -430,6 +469,80 @@ async function showRecent() {
   }).join("");
 }
 
+// ------------------------------------------------------------ новое письмо
+
+const LETTER_FIELDS = ["number", "date", "recipient_position", "recipient_org",
+  "recipient_person", "subject", "reference", "greeting", "body",
+  "signer_position", "signer_name"];
+
+async function openLetter() {
+  const draft = await (await fetch("/api/letter/draft")).json();
+  document.getElementById("l-number").value = draft.number || "";
+  document.getElementById("l-date").value = draft.date || "";
+  document.getElementById("l-signer-position").value = draft.signer_position || "";
+  document.getElementById("l-signer-name").value = draft.signer_name || "";
+  document.getElementById("letterhead").textContent =
+    (draft.letterhead || []).join("\n") || "Бланк не заполнен в конфиге";
+  document.getElementById("recipients").innerHTML =
+    (draft.recipients || []).map(v => `<option value="${escapeHtml(v)}">`).join("");
+  document.getElementById("letter-status").textContent = "";
+  document.getElementById("letter").showModal();
+}
+
+// ссылку на прежнее письмо подставляем из выдачи: искать её руками —
+// ровно та работа, ради отмены которой всё и затевалось
+function referenceFrom(doc) {
+  const parts = [];
+  if (doc.doc_number) parts.push(doc.doc_number);
+  if (doc.doc_date) parts.push("от " + ruDate(doc.doc_date));
+  return parts.join(" ");
+}
+
+function useAsReference(id) {
+  const doc = (lastResults || []).find(d => d.id === id);
+  if (!doc) return;
+  openLetter().then(() => {
+    document.getElementById("l-reference").value = referenceFrom(doc);
+    if (doc.counterparty) {
+      document.getElementById("l-recipient-org").value = doc.counterparty;
+    }
+  });
+}
+
+async function buildLetter() {
+  const body = {};
+  for (const field of LETTER_FIELDS) {
+    const input = document.getElementById("l-" + field.replace(/_/g, "-"));
+    if (input) body[field] = input.value.trim();
+  }
+  if (!body.recipient_org) {
+    document.getElementById("letter-status").textContent = "Укажите, кому письмо";
+    return;
+  }
+  const status = document.getElementById("letter-status");
+  status.textContent = "Собираю…";
+  const response = await fetch("/api/letter", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    status.textContent = "Не удалось: " + (await response.text()).slice(0, 200);
+    return;
+  }
+  const blob = await response.blob();
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = decodeURIComponent(
+    (response.headers.get("Content-Disposition") || "").split("''")[1] || "Письмо.docx");
+  link.click();
+  URL.revokeObjectURL(link.href);
+  status.innerHTML = '<span class="edited">Готово, файл скачан</span>';
+}
+
+document.getElementById("new-letter").onclick = openLetter;
+document.getElementById("letter-build").onclick = buildLetter;
+
 document.getElementById("card-save").onclick = saveCard;
 document.getElementById("card-auto").onclick = resetCard;
 document.getElementById("refresh").onclick = refreshArchive;
@@ -452,14 +565,14 @@ document.getElementById("q").addEventListener("keydown", event => {
   if (event.key === "Enter") document.getElementById("go").click();
 });
 document.getElementById("reset").onclick = () => {
-  Object.assign(state, { q: "", type: "", org: "", year: "", ext: "", page: 1 });
+  Object.assign(state, { q: "", section: "", type: "", org: "", year: "", ext: "", page: 1 });
   document.getElementById("q").value = "";
   load();
 };
 
 // состояние живёт в адресной строке: ссылку на выборку можно переслать
 const initial = new URLSearchParams(location.search);
-for (const key of ["q", "type", "org", "year", "ext"]) {
+for (const key of ["q", "section", "type", "org", "year", "ext"]) {
   if (initial.get(key)) state[key] = initial.get(key);
 }
 state.page = parseInt(initial.get("page") || "1", 10);

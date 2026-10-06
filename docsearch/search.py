@@ -24,7 +24,8 @@ WITH_QUERY = "doc_fts JOIN documents d ON d.id = doc_fts.rowid"
 WITHOUT_QUERY = "documents d"
 
 FIELDS = ("d.id, d.path, d.rel_path, d.name, d.ext, d.size, d.root,"
-          " d.doc_type, d.doc_number, d.doc_date, d.counterparty,"
+          " d.section, d.doc_type, d.doc_number, d.doc_date,"
+          " d.counterparty,"
           " d.object_code, d.status, d.needs_ocr")
 
 
@@ -32,6 +33,7 @@ FIELDS = ("d.id, d.path, d.rel_path, d.name, d.ext, d.size, d.root,"
 class Filters:
     ext: str | None = None
     root: str | None = None
+    section: str | None = None
     doc_type: str | None = None
     counterparty: str | None = None
     year: str | None = None
@@ -84,6 +86,9 @@ def conditions(query: str, filters: Filters | None = None) -> tuple[str, str, li
     if filters.root:
         where.append("d.root = ?")
         params.append(filters.root)
+    if filters.section:
+        where.append("d.section = ?")
+        params.append(filters.section)
     if filters.doc_type:
         where.append("d.doc_type = ?")
         params.append(filters.doc_type)

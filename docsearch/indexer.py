@@ -76,7 +76,8 @@ def index_root(
         result = extract.extract(path)
         text = result.text[: cfg.max_text_chars]
         rel_path = str(path.relative_to(root_path))
-        attrs = meta.guess(path, rel_path, text, cfg.own_org)
+        attrs = meta.guess(path, rel_path, text, cfg.own_org,
+                           cfg.section_rules)
         attrs.update({k: v for k, v in result.meta.items() if v})
         attrs.pop("organizations", None)   # в карточку идёт только контрагент
         # правка человека сильнее любого автоматического разбора
@@ -149,7 +150,8 @@ def reparse(conn: sqlite3.Connection, cfg: Config, progress=None) -> dict:
     changed = 0
     seen = 0
     rows = conn.execute(
-        "SELECT d.id, d.path, d.rel_path, d.doc_type, d.doc_number,"
+        "SELECT d.id, d.path, d.rel_path, d.section, d.doc_type,"
+        " d.doc_number,"
         " d.doc_date, d.counterparty, d.object_code,"
         " (SELECT body FROM doc_fts WHERE rowid = d.id) AS body"
         " FROM documents d"
@@ -158,16 +160,17 @@ def reparse(conn: sqlite3.Connection, cfg: Config, progress=None) -> dict:
     for row in rows:
         seen += 1
         attrs = meta.guess(Path(row["path"]), row["rel_path"],
-                           row["body"] or "", cfg.own_org)
+                           row["body"] or "", cfg.own_org,
+                           cfg.section_rules)
         attrs.pop("organizations", None)
         attrs = db.apply_override(attrs, overrides.get(row["path"], {}))
-        fields = ("doc_type", "doc_number", "doc_date", "counterparty",
-                  "object_code")
+        fields = ("section", "doc_type", "doc_number", "doc_date",
+                  "counterparty", "object_code")
         if all(attrs.get(f) == row[f] for f in fields):
             continue
         conn.execute(
-            "UPDATE documents SET doc_type=?, doc_number=?, doc_date=?,"
-            " counterparty=?, object_code=? WHERE id=?",
+            "UPDATE documents SET section=?, doc_type=?, doc_number=?,"
+            " doc_date=?, counterparty=?, object_code=? WHERE id=?",
             tuple(attrs.get(f) for f in fields) + (row["id"],),
         )
         changed += 1
@@ -192,12 +195,13 @@ def reparse_one(conn: sqlite3.Connection, cfg: Config, doc_id: int) -> None:
     if not row:
         return
     attrs = meta.guess(Path(row["path"]), row["rel_path"], row["body"] or "",
-                       cfg.own_org)
+                       cfg.own_org, cfg.section_rules)
     attrs.pop("organizations", None)
     conn.execute(
-        "UPDATE documents SET doc_type=?, doc_number=?, doc_date=?,"
-        " counterparty=?, object_code=? WHERE id=?",
-        (attrs.get("doc_type"), attrs.get("doc_number"), attrs.get("doc_date"),
+        "UPDATE documents SET section=?, doc_type=?, doc_number=?,"
+        " doc_date=?, counterparty=?, object_code=? WHERE id=?",
+        (attrs.get("section"), attrs.get("doc_type"),
+         attrs.get("doc_number"), attrs.get("doc_date"),
          attrs.get("counterparty"), attrs.get("object_code"), doc_id),
     )
     conn.commit()

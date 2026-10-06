@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import morph
+from . import morph, sections
 
 # Смотрим только в шапку: дальше пойдут даты из тела и номера пунктов
 HEAD_CHARS = 1500
@@ -65,10 +65,23 @@ MONTHS = {
     "декабря": 12,
 }
 
-RE_NUM_LABELLED = re.compile(
-    r"(?:исх|вх|рег)\.?\s*(?:№|N[oº]?|#)\s*([0-9][^\s,;]{0,24})", re.IGNORECASE
+# Номер письма бывает с буквенным префиксом: «Исх. РТП-175». Знак
+# номера в таком виде обычно не пишут, поэтому для префиксных номеров
+# он необязателен, а для голых цифр остаётся обязательным — иначе
+# «Исх 270» в имени файла перебило бы более полный номер из текста
+PREFIXED = r"[A-Za-zА-Яа-яЁё]{1,6}-\d[\w/.-]{0,15}"
+PLAIN = r"\d[^\s,;]{0,24}"
+
+RE_NUM_PREFIXED = re.compile(
+    r"(?:исх|вх|рег)\.?\s*(?:(?:№|N[oº]?|#)\s*)?(" + PREFIXED + r")",
+    re.IGNORECASE,
 )
-RE_NUM_PLAIN = re.compile(r"(?:№|N[oº])\s*([0-9][^\s,;]{0,24})")
+RE_NUM_LABELLED = re.compile(
+    r"(?:исх|вх|рег)\.?\s*(?:№|N[oº]?|#)\s*("
+    + PREFIXED + r"|" + PLAIN + r")",
+    re.IGNORECASE,
+)
+RE_NUM_PLAIN = re.compile(r"(?:№|N[oº])\s*(" + PREFIXED + r"|" + PLAIN + r")")
 RE_DATE_NUM = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})\b")
 RE_DATE_WORD = re.compile(
     r"\b(\d{1,2})\s+(" + "|".join(MONTHS) + r")\s+(\d{4})", re.IGNORECASE
@@ -259,7 +272,8 @@ def find_date(text: str) -> str | None:
 
 
 def find_number(text: str) -> str | None:
-    m = RE_NUM_LABELLED.search(text) or RE_NUM_PLAIN.search(text)
+    m = (RE_NUM_PREFIXED.search(text) or RE_NUM_LABELLED.search(text)
+         or RE_NUM_PLAIN.search(text))
     return m.group(1).rstrip(".,;") if m else None
 
 
@@ -311,15 +325,19 @@ def find_object_code(text: str) -> str | None:
 
 
 def guess(path: Path, rel_path: str, text: str,
-          own_org: str | None = None) -> dict:
+          own_org: str | None = None,
+          section_rules: dict | None = None) -> dict:
     """Собрать атрибуты из имени файла, пути и шапки текста."""
     head = text[:HEAD_CHARS]
     name = path.stem
     folders = str(Path(rel_path).parent).replace("\\", " / ")
+    doc_type = find_doc_type(name, folders, head)
 
     return {
+        # крупная группировка: разводит альбом РД и скан письма
+        "section": sections.guess_for(path, rel_path, doc_type, section_rules),
         # тип ищем сначала в имени файла — оно обычно честнее шапки
-        "doc_type": find_doc_type(name, folders, head),
+        "doc_type": doc_type,
         "doc_number": find_number(name) or find_number(head),
         "doc_date": find_date(name) or find_date(head),
         "object_code": find_object_code(head) or find_object_code(folders),

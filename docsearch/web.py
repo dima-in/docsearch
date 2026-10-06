@@ -11,12 +11,15 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               Response)
 
-from . import db, indexer
+from . import db, indexer, letters
 from . import search as search_mod
 from .config import Config
 
@@ -49,6 +52,7 @@ def create_app(cfg: Config) -> FastAPI:
     @app.get("/api/search")
     def api_search(
         q: str = "",
+        section: str = "",
         type: str = "",
         org: str = "",
         year: str = "",
@@ -57,6 +61,7 @@ def create_app(cfg: Config) -> FastAPI:
         per_page: int = Query(20, ge=1, le=100),
     ) -> JSONResponse:
         filters = search_mod.Filters(
+            section=section or None,
             doc_type=type or None,
             counterparty=org or None,
             year=year or None,
@@ -186,6 +191,45 @@ def create_app(cfg: Config) -> FastAPI:
             return JSONResponse({"results": db.recent(conn, limit)})
         finally:
             conn.close()
+
+    @app.get("/api/letter/draft")
+    def api_letter_draft() -> JSONResponse:
+        """Заготовка нового письма: номер и список адресатов из архива."""
+        head = letters.Letterhead.from_config(cfg.letterhead)
+        conn = connect()
+        try:
+            return JSONResponse({
+                "number": letters.next_number(conn, head.number_prefix),
+                "date": date.today().isoformat(),
+                "recipients": letters.known_recipients(conn),
+                "signer_position": head.signer_position,
+                "signer_name": head.signer_name,
+                "letterhead": head.header_lines(),
+            })
+        finally:
+            conn.close()
+
+    @app.post("/api/letter")
+    def api_letter(letter: dict = Body(...)) -> Response:
+        """Собрать .docx и отдать на скачивание.
+
+        В архив ничего не пишем: куда класть письмо, решает человек. Файл
+        скачивается, правится и сохраняется в нужную папку обычным
+        способом — следующий обход подхватит его сам.
+        """
+        head = letters.Letterhead.from_config(cfg.letterhead)
+        if not head.name:
+            raise HTTPException(400, "В конфиге не заполнен раздел letterhead")
+        blob = letters.build_docx(letter, head)
+        name = letters.file_name(letter)
+        quoted = quote(name)
+        return Response(
+            content=blob,
+            media_type="application/vnd.openxmlformats-officedocument"
+                       ".wordprocessingml.document",
+            headers={"Content-Disposition":
+                     f"attachment; filename*=UTF-8''{quoted}"},
+        )
 
     @app.get("/api/stats")
     def api_stats() -> JSONResponse:

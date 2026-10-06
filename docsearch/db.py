@@ -48,6 +48,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
 -- обязана. Автоматический разбор никогда не затирает эти значения.
 CREATE TABLE IF NOT EXISTS overrides (
     path         TEXT PRIMARY KEY,
+    section      TEXT,
     doc_type     TEXT,
     doc_number   TEXT,
     doc_date     TEXT,
@@ -79,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_ocr    ON documents(needs_ocr, ocr_stat
 # быть. Ронять готовый индекс из-за нового поля недопустимо, поэтому
 # добавляем недостающее на месте
 OPTIONAL_COLUMNS = {
+    "section": "TEXT",
     "doc_type": "TEXT",
     "doc_number": "TEXT",
     "doc_date": "TEXT",
@@ -92,14 +94,22 @@ OPTIONAL_COLUMNS = {
 }
 
 
+def _add_missing(conn: sqlite3.Connection, table: str,
+                 columns: dict) -> list[str]:
+    existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    added = []
+    for column, kind in columns.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+            added.append(f"{table}.{column}")
+    return added
+
+
 def migrate(conn: sqlite3.Connection) -> list[str]:
     """Дополнить старую базу недостающими колонками. Возвращает добавленные."""
-    existing = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}
-    added = []
-    for column, kind in OPTIONAL_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE documents ADD COLUMN {column} {kind}")
-            added.append(column)
+    added = _add_missing(conn, "documents", OPTIONAL_COLUMNS)
+    # у ручных правок свой набор полей, и он тоже растёт
+    added += _add_missing(conn, "overrides", {"section": "TEXT"})
     if added:
         conn.commit()
     return added
@@ -135,7 +145,8 @@ def upsert(conn: sqlite3.Connection, doc: dict, body: str, lemmas: str) -> int:
     row = cur.fetchone()
     fields = (
         doc["root"], doc["rel_path"], doc["name"], doc["ext"], doc["size"],
-        doc["mtime"], doc.get("doc_type"), doc.get("doc_number"),
+        doc["mtime"], doc.get("section"), doc.get("doc_type"),
+        doc.get("doc_number"),
         doc.get("doc_date"), doc.get("counterparty"), doc.get("object_code"),
         doc.get("page_count"), int(doc.get("needs_ocr", 0)),
         doc.get("status", "ok"), doc.get("error"), time.time(),
@@ -146,7 +157,8 @@ def upsert(conn: sqlite3.Connection, doc: dict, body: str, lemmas: str) -> int:
             # содержимое файла изменилось, значит прежнее распознавание
             # устарело — возвращаем документ в очередь на OCR
             """UPDATE documents SET root=?, rel_path=?, name=?, ext=?, size=?,
-               mtime=?, doc_type=?, doc_number=?, doc_date=?, counterparty=?,
+               mtime=?, section=?, doc_type=?, doc_number=?, doc_date=?,
+               counterparty=?,
                object_code=?, page_count=?, needs_ocr=?, status=?, error=?,
                indexed_at=?, ocr_status=NULL, ocr_at=NULL, ocr_chars=NULL
                WHERE id=?""",
@@ -156,9 +168,9 @@ def upsert(conn: sqlite3.Connection, doc: dict, body: str, lemmas: str) -> int:
     else:
         cur = conn.execute(
             """INSERT INTO documents (path, root, rel_path, name, ext, size,
-               mtime, doc_type, doc_number, doc_date, counterparty, object_code,
-               page_count, needs_ocr, status, error, indexed_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               mtime, section, doc_type, doc_number, doc_date, counterparty,
+               object_code, page_count, needs_ocr, status, error, indexed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (doc["path"],) + fields,
         )
         doc_id = cur.lastrowid
@@ -197,6 +209,13 @@ def stats(conn: sqlite3.Connection) -> dict:
     ocr = conn.execute(
         "SELECT COUNT(*) c FROM documents WHERE needs_ocr = 1"
     ).fetchone()["c"]
+    by_section = [
+        (r["section"] or "(не определён)", r["c"])
+        for r in conn.execute(
+            "SELECT section, COUNT(*) c FROM documents"
+            " GROUP BY section ORDER BY c DESC"
+        )
+    ]
     by_type = [
         (r["doc_type"] or "(не определён)", r["c"])
         for r in conn.execute(
@@ -216,7 +235,8 @@ def stats(conn: sqlite3.Connection) -> dict:
         "SELECT COUNT(*) c FROM documents WHERE counterparty IS NULL"
     ).fetchone()["c"]
     return {"total": total, "by_status": by_status, "by_ext": by_ext,
-            "by_type": by_type, "by_org": by_org, "no_org": no_org,
+            "by_section": by_section, "by_type": by_type,
+            "by_org": by_org, "no_org": no_org,
             "needs_ocr": ocr}
 
 
@@ -391,6 +411,7 @@ def error_paths(conn: sqlite3.Connection, root: str) -> set[str]:
 # Для каждой грани своя сортировка: у категорий важно, чего больше,
 # у организаций — найти нужную в длинном списке, у годов — свежие сверху
 FACET_FIELDS = {
+    "section": ("d.section", "c DESC"),
     "type": ("d.doc_type", "c DESC"),
     # сортируем по названию внутри кавычек, иначе всё сгруппируется
     # по форме собственности: сначала все АО, потом все ООО
@@ -424,8 +445,8 @@ def facets(conn: sqlite3.Connection, source: str, where: str, params: list,
     return result
 
 
-OVERRIDE_FIELDS = ("doc_type", "doc_number", "doc_date", "counterparty",
-                   "object_code", "note")
+OVERRIDE_FIELDS = ("section", "doc_type", "doc_number", "doc_date",
+                   "counterparty", "object_code", "note")
 
 
 def get_override(conn: sqlite3.Connection, path: str) -> dict:
@@ -468,23 +489,25 @@ def set_override(conn: sqlite3.Connection, path: str, values: dict,
     merged.update(clean)
 
     conn.execute(
-        "INSERT INTO overrides (path, doc_type, doc_number, doc_date,"
+        "INSERT INTO overrides (path, section, doc_type, doc_number, doc_date,"
         " counterparty, object_code, note, edited_at, edited_by)"
-        " VALUES (?,?,?,?,?,?,?,?,?)"
-        " ON CONFLICT(path) DO UPDATE SET doc_type=excluded.doc_type,"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(path) DO UPDATE SET section=excluded.section,"
+        " doc_type=excluded.doc_type,"
         " doc_number=excluded.doc_number, doc_date=excluded.doc_date,"
         " counterparty=excluded.counterparty, object_code=excluded.object_code,"
         " note=excluded.note, edited_at=excluded.edited_at,"
         " edited_by=excluded.edited_by",
-        (path, merged["doc_type"], merged["doc_number"], merged["doc_date"],
-         merged["counterparty"], merged["object_code"], merged["note"],
-         time.time(), author),
+        (path, merged["section"], merged["doc_type"], merged["doc_number"],
+         merged["doc_date"], merged["counterparty"], merged["object_code"],
+         merged["note"], time.time(), author),
     )
     conn.execute(
-        "UPDATE documents SET doc_type=?, doc_number=?, doc_date=?,"
-        " counterparty=?, object_code=? WHERE path=?",
-        (merged["doc_type"], merged["doc_number"], merged["doc_date"],
-         merged["counterparty"], merged["object_code"], path),
+        "UPDATE documents SET section=?, doc_type=?, doc_number=?,"
+        " doc_date=?, counterparty=?, object_code=? WHERE path=?",
+        (merged["section"], merged["doc_type"], merged["doc_number"],
+         merged["doc_date"], merged["counterparty"],
+         merged["object_code"], path),
     )
     conn.commit()
     return merged
@@ -505,7 +528,7 @@ def recent(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
     """
     rows = conn.execute(
         "SELECT d.id, d.path, d.rel_path, d.name, d.ext, d.size, d.root,"
-        " d.doc_type, d.doc_number, d.doc_date, d.counterparty,"
+        " d.section, d.doc_type, d.doc_number, d.doc_date, d.counterparty,"
         " d.object_code, d.status, d.needs_ocr, d.indexed_at,"
         " (o.path IS NOT NULL) AS edited"
         " FROM documents d LEFT JOIN overrides o ON o.path = d.path"

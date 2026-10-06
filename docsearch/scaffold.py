@@ -41,6 +41,18 @@ ocr:
   lang: "rus"
   dpi: 300
   max_pages: 40
+
+# Бланк организации для генератора исходящих писем
+letterhead:
+  name: ""
+  legal_address: ""
+  inn: ""
+  kpp: ""
+  phone: ""
+  email: ""
+  signer_position: ""
+  signer_name: ""
+  number_prefix: ""
 """
 
 
