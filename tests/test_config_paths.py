@@ -93,3 +93,36 @@ def test_letterhead_is_read(tmp_path: Path):
     )
     cfg = config_mod.load(cfg_file)
     assert cfg.letterhead["number_prefix"] == "РТП"
+
+
+def test_duplicate_key_is_refused(tmp_path: Path):
+    """Повторённый ключ молча терялся: YAML берёт последний."""
+    import yaml
+
+    cfg_file = tmp_path / "config.local.yaml"
+    cfg_file.write_text(
+        "roots:\n  - path: './sample'\nindex:\n  db: 'index.db'\n"
+        "letterhead:\n  template: 'templates/письмо.docx'\n  template: ''\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(yaml.YAMLError) as exc:
+        config_mod.load(cfg_file)
+    assert "template" in str(exc.value)
+    assert "дважды" in str(exc.value)
+
+
+def test_duplicate_at_top_level_is_refused(tmp_path: Path):
+    import yaml
+
+    cfg_file = tmp_path / "config.local.yaml"
+    cfg_file.write_text(
+        "roots:\n  - path: './sample'\nindex:\n  db: 'a.db'\nindex:\n  db: 'b.db'\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(yaml.YAMLError):
+        config_mod.load(cfg_file)
+
+
+def test_normal_config_still_loads(tmp_path: Path):
+    cfg = config_mod.load(write_config(tmp_path, '"./sample"'))
+    assert cfg.roots[0].label

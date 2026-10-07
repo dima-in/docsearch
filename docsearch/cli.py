@@ -7,6 +7,7 @@ import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+import yaml
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -774,7 +775,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     _fix_console()
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except yaml.YAMLError as exc:
+        # опечатка в конфиге — обычное дело, трассировка тут не помогает
+        print(f"Неуспех: конфиг не разобран. {exc}")
+        return 1
+    except FileNotFoundError as exc:
+        print(f"Неуспех: {exc}")
+        return 1
 
 
 if __name__ == "__main__":

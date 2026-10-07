@@ -58,6 +58,32 @@ class Config:
         return self.max_file_mb * 1024 * 1024
 
 
+class StrictLoader(yaml.SafeLoader):
+    """YAML, который не прощает повторяющийся ключ.
+
+    По умолчанию побеждает последний, и настройка молча теряется: строка
+    в файле есть, а действия от неё нет. Такую ошибку ищут часами.
+    """
+
+
+def _no_duplicates(loader, node, deep=False):
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            mark = key_node.start_mark
+            raise yaml.YAMLError(
+                f"ключ «{key}» указан дважды (строка {mark.line + 1}). "
+                "Оставьте одну строку: иначе сработает последняя"
+            )
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
+
+
 def _with_template(letterhead: dict, resolve) -> dict:
     """Путь к бланку считаем от папки конфига, как и всё остальное:
     иначе он находится, только пока запускаешь из папки проекта."""
@@ -70,7 +96,7 @@ def _with_template(letterhead: dict, resolve) -> dict:
 def load(path: str | os.PathLike | None = None) -> Config:
     cfg_path = Path(path) if path else DEFAULT_CONFIG
     with open(cfg_path, encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh) or {}
+        raw = yaml.load(fh, Loader=StrictLoader) or {}
 
     base = cfg_path.resolve().parent
 
