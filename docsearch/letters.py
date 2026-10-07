@@ -101,26 +101,65 @@ def parse_number(value: str) -> tuple[str, int] | None:
     return prefix, int(match.group("digits"))
 
 
+# Один документ с кривым номером не должен задирать нумерацию: в архиве
+# есть сканы, где распознавание приписало лишнюю цифру. Номер считаем
+# выбросом, если до ближайшего снизу больше этого разрыва.
+MAX_GAP = 100
+# По двум-трём номерам выброс не определить: редкая нумерация с большими
+# разрывами — тоже нормальная нумерация
+MIN_SAMPLE = 5
+
+
+def numbers_for(conn: sqlite3.Connection, prefix: str) -> list[int]:
+    """Все номера с этим префиксом, по возрастанию."""
+    wanted = prefix.strip().lower()
+    found = []
+    for row in conn.execute(
+        "SELECT doc_number FROM documents"
+        " WHERE doc_number IS NOT NULL AND doc_number != ''"
+    ):
+        parsed = parse_number(row["doc_number"])
+        if not parsed:
+            continue
+        found_prefix, number = parsed
+        if found_prefix.lower() == wanted:
+            found.append(number)
+    return sorted(found)
+
+
+def highest_sane(numbers: list[int], max_gap: int = MAX_GAP) -> int:
+    """Наибольший номер, вокруг которого есть соседи.
+
+    Идём сверху вниз и пропускаем значения, оторвавшиеся от остальных:
+    одинокая 19095 среди номеров около 1300 — это испорченная цифра, а не
+    достигнутый рубеж нумерации.
+    """
+    if not numbers:
+        return 0
+    if len(numbers) < MIN_SAMPLE:
+        return numbers[-1]
+    for i in range(len(numbers) - 1, 0, -1):
+        if numbers[i] - numbers[i - 1] <= max_gap:
+            return numbers[i]
+    return numbers[0]
+
+
 def next_number(conn: sqlite3.Connection, prefix: str) -> str:
     """Следующий свободный номер по этому префиксу.
 
     Максимум берём из самого архива: журнал исходящих вести отдельно
     никто не станет, а письма в папке — это и есть журнал.
     """
-    rows = conn.execute(
-        "SELECT doc_number FROM documents"
-        " WHERE doc_number IS NOT NULL AND doc_number != ''"
-    )
-    wanted = prefix.strip().lower()
-    highest = 0
-    for row in rows:
-        parsed = parse_number(row["doc_number"])
-        if not parsed:
-            continue
-        found_prefix, number = parsed
-        if found_prefix.lower() == wanted and number > highest:
-            highest = number
+    highest = highest_sane(numbers_for(conn, prefix))
     return f"{prefix}-{highest + 1}" if prefix else str(highest + 1)
+
+
+def previous_number(conn: sqlite3.Connection, prefix: str) -> str:
+    """От какого номера считается следующий — чтобы ошибку было видно сразу."""
+    highest = highest_sane(numbers_for(conn, prefix))
+    if not highest:
+        return ""
+    return f"{prefix}-{highest}" if prefix else str(highest)
 
 
 def known_recipients(conn: sqlite3.Connection, limit: int = 100) -> list[str]:

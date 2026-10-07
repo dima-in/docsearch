@@ -104,6 +104,7 @@
   .card-form textarea:focus,
   .card-form input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
   .card-form .row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+  .hint-inline { color: var(--muted); font-size: 12px; margin-left: 10px; }
   .card-form .hint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
   .edited { background: #eaf7ec; color: #1c6b2c; border-radius: 4px; padding: 1px 7px; font-size: 12px; }
   .notice { background: #fff8e1; border: 1px solid #f0dda0; border-radius: 8px;
@@ -147,7 +148,8 @@
   </header>
   <pre id="letterhead" class="letterhead"></pre>
   <div class="card-form">
-    <label for="l-number">Исх. №</label><input id="l-number">
+    <label for="l-number">Исх. №</label>
+    <span><input id="l-number"><span id="l-number-hint" class="hint-inline"></span></span>
     <label for="l-date">Дата</label><input id="l-date" type="date">
     <label for="l-reference">На №</label><input id="l-reference" placeholder="ссылка на входящее, если есть">
     <label for="l-recipient-position">Кому, должность</label><input id="l-recipient-position" placeholder="Генеральному директору">
@@ -480,6 +482,8 @@ const LETTER_FIELDS = ["number", "date", "recipient_position", "recipient_org",
 async function openLetter() {
   const draft = await (await fetch("/api/letter/draft")).json();
   document.getElementById("l-number").value = draft.number || "";
+  document.getElementById("l-number-hint").textContent =
+    draft.number_after ? "следующий после " + draft.number_after : "";
   document.getElementById("l-date").value = draft.date || "";
   document.getElementById("l-signer-position").value = draft.signer_position || "";
   document.getElementById("l-signer-name").value = draft.signer_name || "";

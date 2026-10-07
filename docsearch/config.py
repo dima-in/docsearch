@@ -58,6 +58,15 @@ class Config:
         return self.max_file_mb * 1024 * 1024
 
 
+def _with_template(letterhead: dict, resolve) -> dict:
+    """Путь к бланку считаем от папки конфига, как и всё остальное:
+    иначе он находится, только пока запускаешь из папки проекта."""
+    if letterhead.get("template"):
+        letterhead = dict(letterhead)
+        letterhead["template"] = resolve(letterhead["template"])
+    return letterhead
+
+
 def load(path: str | os.PathLike | None = None) -> Config:
     cfg_path = Path(path) if path else DEFAULT_CONFIG
     with open(cfg_path, encoding="utf-8") as fh:
@@ -90,7 +99,7 @@ def load(path: str | os.PathLike | None = None) -> Config:
         own_org=idx.get("own_organization") or None,
         org_aliases=idx.get("organization_aliases") or {},
         section_rules=idx.get("sections") or {},
-        letterhead=raw.get("letterhead") or {},
+        letterhead=_with_template(raw.get("letterhead") or {}, resolve),
         ocr=raw.get("ocr") or {},
         exclude_globs=list(idx.get("exclude_globs", [])),
     )

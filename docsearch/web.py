@@ -200,6 +200,7 @@ def create_app(cfg: Config) -> FastAPI:
         try:
             return JSONResponse({
                 "number": letters.next_number(conn, head.number_prefix),
+                "number_after": letters.previous_number(conn, head.number_prefix),
                 "date": date.today().isoformat(),
                 "recipients": letters.recipients(conn),
                 "signer_position": head.signer_position,

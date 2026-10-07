@@ -324,3 +324,35 @@ def test_letterhead_includes_ogrn_and_fax():
     lines = head.header_lines()
     assert "ОГРН 1135029002547 ИНН 5029172308 КПП 772801001" in lines
     assert any("Факс: 8(495)785-39-30" in line for line in lines)
+
+
+def test_one_bad_number_does_not_poison_numbering():
+    """Скан с лишней цифрой задирал счётчик на порядок: РТП-19095."""
+    assert letters.highest_sane([1300, 1310, 1320, 1330, 1335, 19095]) == 1335
+
+
+def test_real_jump_in_numbering_is_kept():
+    """Если нумерация действительно ушла вверх, там плотная группа."""
+    assert letters.highest_sane([100, 19000, 19050, 19080, 19095]) == 19095
+
+
+def test_small_sample_is_trusted_as_is():
+    assert letters.highest_sane([9, 175]) == 175
+    assert letters.highest_sane([5]) == 5
+    assert letters.highest_sane([]) == 0
+
+
+def test_template_path_is_relative_to_config(tmp_path: Path):
+    """Бланк должен находиться независимо от того, откуда запущено."""
+    from docsearch import config as config_mod
+
+    (tmp_path / "templates").mkdir()
+    make_template(tmp_path / "templates" / "письмо.docx")
+    cfg_file = tmp_path / "config.local.yaml"
+    cfg_file.write_text(
+        "roots:\n  - path: './arc'\nindex:\n  db: 'index.db'\n"
+        "letterhead:\n  name: 'ООО «Тест»'\n"
+        "  template: 'templates/письмо.docx'\n",
+        encoding="utf-8")
+    cfg = config_mod.load(cfg_file)
+    assert Path(cfg.letterhead["template"]).exists()
