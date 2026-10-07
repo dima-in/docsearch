@@ -33,8 +33,10 @@ class Letterhead:
     name: str = ""
     legal_address: str = ""
     actual_address: str = ""
+    ogrn: str = ""
     inn: str = ""
     kpp: str = ""
+    fax: str = ""
     phone: str = ""
     email: str = ""
     signer_position: str = ""
@@ -50,8 +52,10 @@ class Letterhead:
             name=raw.get("name", ""),
             legal_address=raw.get("legal_address", ""),
             actual_address=raw.get("actual_address", ""),
+            ogrn=str(raw.get("ogrn", "")),
             inn=str(raw.get("inn", "")),
             kpp=str(raw.get("kpp", "")),
+            fax=raw.get("fax", ""),
             phone=raw.get("phone", ""),
             email=raw.get("email", ""),
             signer_position=raw.get("signer_position", ""),
@@ -69,13 +73,15 @@ class Letterhead:
         if self.actual_address and self.actual_address != self.legal_address:
             lines.append(f"Факт. адрес: {self.actual_address}")
         requisites = " ".join(
-            part for part in (f"ИНН {self.inn}" if self.inn else "",
+            part for part in (f"ОГРН {self.ogrn}" if self.ogrn else "",
+                              f"ИНН {self.inn}" if self.inn else "",
                               f"КПП {self.kpp}" if self.kpp else "") if part
         )
         if requisites:
             lines.append(requisites)
         contacts = "   ".join(
             part for part in (f"Тел.: {self.phone}" if self.phone else "",
+                              f"Факс: {self.fax}" if self.fax else "",
                               self.email) if part
         )
         if contacts:

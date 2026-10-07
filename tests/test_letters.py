@@ -311,3 +311,16 @@ def test_contacts_endpoint(env):
     conn, cfg = env
     client = TestClient(create_app(cfg))
     assert client.post("/api/letter/contacts").status_code == 200
+
+
+def test_letterhead_includes_ogrn_and_fax():
+    """Реквизиты идут одной строкой, как в настоящем бланке."""
+    head = letters.Letterhead.from_config({
+        "name": "ООО «ФБ-СТРОЙ»", "ogrn": "1135029002547",
+        "inn": "5029172308", "kpp": "772801001",
+        "phone": "8(499)649-00-50", "fax": "8(495)785-39-30",
+        "email": "info@fbstroy.ru",
+    })
+    lines = head.header_lines()
+    assert "ОГРН 1135029002547 ИНН 5029172308 КПП 772801001" in lines
+    assert any("Факс: 8(495)785-39-30" in line for line in lines)

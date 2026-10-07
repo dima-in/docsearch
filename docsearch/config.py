@@ -45,6 +45,7 @@ class Config:
     org_aliases: dict = field(default_factory=dict)
     section_rules: dict = field(default_factory=dict)
     letterhead: dict = field(default_factory=dict)
+    ocr: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # служебные папки исключаются всегда, как бы ни собрали Config
@@ -90,5 +91,6 @@ def load(path: str | os.PathLike | None = None) -> Config:
         org_aliases=idx.get("organization_aliases") or {},
         section_rules=idx.get("sections") or {},
         letterhead=raw.get("letterhead") or {},
+        ocr=raw.get("ocr") or {},
         exclude_globs=list(idx.get("exclude_globs", [])),
     )

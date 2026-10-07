@@ -69,3 +69,27 @@ def test_config_excludes_are_added_not_replaced(tmp_path: Path):
     cfg = config_mod.load(cfg_file)
     assert "мои черновики" in cfg.exclude_dirs
     assert "#recycle" in cfg.exclude_dirs
+
+
+def test_ocr_settings_are_read(tmp_path: Path):
+    """Секция ocr в конфиге должна что-то значить, а не лежать для вида."""
+    cfg_file = tmp_path / "config.local.yaml"
+    cfg_file.write_text(
+        "roots:\n  - path: './sample'\nindex:\n  db: 'index.db'\n"
+        "ocr:\n  lang: 'rus+eng'\n  dpi: 400\n  max_pages: 10\n",
+        encoding="utf-8",
+    )
+    cfg = config_mod.load(cfg_file)
+    assert cfg.ocr["lang"] == "rus+eng"
+    assert cfg.ocr["dpi"] == 400
+
+
+def test_letterhead_is_read(tmp_path: Path):
+    cfg_file = tmp_path / "config.local.yaml"
+    cfg_file.write_text(
+        "roots:\n  - path: './sample'\nindex:\n  db: 'index.db'\n"
+        "letterhead:\n  name: 'ООО «Тест»'\n  number_prefix: 'РТП'\n",
+        encoding="utf-8",
+    )
+    cfg = config_mod.load(cfg_file)
+    assert cfg.letterhead["number_prefix"] == "РТП"

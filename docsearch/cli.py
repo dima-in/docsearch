@@ -377,6 +377,10 @@ def cmd_sniff(args) -> int:
 def cmd_ocr(args) -> int:
     """Распознать сканы. Долгая задача: можно прервать и продолжить."""
     cfg = config_mod.load(args.config)
+    # флаг команды сильнее конфига, конфиг сильнее встроенного значения
+    args.lang = args.lang or cfg.ocr.get("lang") or ocr.DEFAULT_LANG
+    args.dpi = args.dpi or int(cfg.ocr.get("dpi") or ocr.DEFAULT_DPI)
+    args.max_pages = args.max_pages or int(cfg.ocr.get("max_pages") or 40)
     try:
         cmd = ocr.check(args.lang)
     except ocr.OcrUnavailable as exc:
@@ -739,9 +743,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ocr", help="распознать сканы (долго, можно прерывать)")
     s.add_argument("-n", "--limit", type=int, default=None,
                    help="сколько файлов обработать за прогон")
-    s.add_argument("--lang", default=ocr.DEFAULT_LANG)
-    s.add_argument("--dpi", type=int, default=ocr.DEFAULT_DPI)
-    s.add_argument("--max-pages", type=int, default=40,
+    s.add_argument("--lang", default=None,
+                   help=f"по умолчанию из конфига, иначе {ocr.DEFAULT_LANG}")
+    s.add_argument("--dpi", type=int, default=None)
+    s.add_argument("--max-pages", type=int, default=None,
                    help="сколько страниц распознавать в одном документе")
     s.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 1))
     s.add_argument("--timeout", type=int, default=ocr.DEFAULT_TIMEOUT)
