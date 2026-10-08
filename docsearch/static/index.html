@@ -168,11 +168,12 @@
     <span><input id="l-number"><span id="l-number-hint" class="hint-inline"></span></span>
     <label for="l-date">Дата</label><input id="l-date" type="date">
     <label for="l-reference">На №</label><input id="l-reference" placeholder="ссылка на входящее, если есть">
-    <label for="l-recipient">Кому</label>
+    <label for="l-recipient">Найти адресата</label>
     <span class="combo-wrap">
       <input id="l-recipient" autocomplete="off"
-             placeholder="фамилия, имя или организация — начните печатать">
+             placeholder="фамилия, имя или организация — поля ниже заполнятся сами">
       <ul id="combo" class="combo"></ul>
+      <span id="recipient-hint" class="hint-inline"></span>
     </span>
     <label for="l-recipient-position">Должность</label><input id="l-recipient-position" placeholder="Генеральному директору">
     <label for="l-recipient-org">Организация</label><input id="l-recipient-org">
@@ -534,6 +535,7 @@ async function openLetter() {
                     "l-recipient-position", "l-contract", "l-intro"]) {
     document.getElementById(id).value = "";
   }
+  document.getElementById("recipient-hint").textContent = "";
   document.getElementById("l-intro").dataset.touched = "";
   const plain = document.querySelector('input[name="body-format"][value="text"]');
   if (plain) plain.checked = true;
@@ -651,8 +653,14 @@ function currentMatches() {
 }
 
 function pickContact(contact) {
-  document.getElementById("l-recipient").value =
-    [contact.person, contact.org].filter(Boolean).join(", ");
+  // поле поиска не хранит результат: он виден в трёх полях ниже, и
+  // держать то же самое ещё и здесь — это четыре поля про одно и то же
+  document.getElementById("l-recipient").value = "";
+  const hint = document.getElementById("recipient-hint");
+  hint.textContent = contact.letters
+    ? `подставлено, писем ${contact.letters}`
+    : "подставлено";
+  setTimeout(() => { hint.textContent = ""; }, 4000);
   document.getElementById("l-recipient-org").value = contact.org || "";
   document.getElementById("l-recipient-position").value = contact.position || "";
   document.getElementById("l-recipient-person").value = contact.person || "";
