@@ -567,3 +567,54 @@ def test_object_code_is_not_mistaken_for_a_letter_number():
     from docsearch import meta
 
     assert meta.find_number("208-1121-ОК-1-АР4", from_start=True) is None
+
+
+def test_template_builder_strips_word_numbering(tmp_path: Path):
+    """Нумерация из исходного письма рисовала «1.» и «2.» на пустых абзацах."""
+    import importlib.util
+
+    import docx
+    from docx.oxml.ns import qn
+
+    source = tmp_path / "письмо.docx"
+    document = docx.Document()
+    table = document.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].paragraphs[0].text = "Исх. РТП-1 от 01.01.2026"
+    document.add_paragraph("Тема: «Проверка»")
+    document.add_paragraph("Уважаемый Иван Иванович!")
+    document.add_paragraph("Между сторонами заключен договор.")
+    document.add_paragraph("Текст письма.")
+    numbered = document.add_paragraph("", style="List Number")
+    document.add_paragraph("С уважением,")
+    document.add_paragraph("Руководитель\t\tИванов И.И.")
+    assert numbered._element.find(qn("w:pPr")).find(qn("w:numPr")) is not None
+    document.save(str(source))
+
+    spec = importlib.util.spec_from_file_location(
+        "make_template",
+        Path(__file__).resolve().parent.parent / "tools" / "make_template.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    target = tmp_path / "шаблон.docx"
+    module.build(str(source), str(target))
+
+    result = docx.Document(str(target))
+    for paragraph in result.paragraphs:
+        pPr = paragraph._element.find(qn("w:pPr"))
+        if pPr is not None:
+            assert pPr.find(qn("w:numPr")) is None
+
+
+def test_own_organization_printed_in_full(tmp_path: Path):
+    """В преамбуле должно стоять печатное название, а не строка сопоставления."""
+    from docsearch.config import Config, Root
+    from docsearch.web import create_app
+
+    cfg = Config(roots=[Root(label="П", path=str(tmp_path))],
+                 db=str(tmp_path / "index.db"),
+                 own_org="ФБ-Строй", letterhead=HEAD)
+    conn = db.connect(cfg.db)
+    conn.close()
+    client = TestClient(create_app(cfg))
+    assert client.get("/api/letter/draft").json()["own_org"] == "ООО «ФБ-СТРОЙ»"

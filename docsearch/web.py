@@ -209,7 +209,9 @@ def create_app(cfg: Config) -> FastAPI:
                 "signer_name": head.signer_name,
                 "letterhead": head.header_lines(),
                 "intro_template": head.intro,
-                "own_org": cfg.own_org or head.name,
+                # в письмо идёт печатное название, а own_organization из
+                # раздела index — это строка для сопоставления
+                "own_org": head.name or cfg.own_org,
                 "object": head.object,
             })
         finally:

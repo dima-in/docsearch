@@ -6,6 +6,10 @@
 
     python tools/make_template.py "Исх. РТП-1335.docx" templates/письмо.docx
 
+Посмотреть, что размечено в готовом шаблоне:
+
+    python tools/make_template.py --show templates/письмо.docx
+
 Старый .doc сначала пересохраните в .docx — Word умеет это сам.
 
 Получившийся шаблон правится в Word как обычный документ: подстановки —
@@ -44,6 +48,28 @@ def set_text(paragraph, text: str) -> None:
 
 def drop(element) -> None:
     element.getparent().remove(element)
+
+
+def strip_numbering(document) -> int:
+    """Убрать из бланка нумерацию абзацев.
+
+    В исходном письме был нумерованный список, и его разметка остаётся в
+    пустых абзацах бланка: Word исправно рисует «1.» и «2.» на пустом
+    месте. Нумерация — свойство содержания, а не бланка; в письме она
+    проставляется по выбору в форме.
+    """
+    from docx.oxml.ns import qn
+
+    removed = 0
+    for paragraph in document.paragraphs:
+        pPr = paragraph._element.find(qn("w:pPr"))
+        if pPr is None:
+            continue
+        numPr = pPr.find(qn("w:numPr"))
+        if numPr is not None:
+            pPr.remove(numPr)
+            removed += 1
+    return removed
 
 
 def build(source: str, target: str) -> list[str]:
@@ -108,12 +134,46 @@ def build(source: str, target: str) -> list[str]:
     if state == "body_done":
         report.append("подпись не найдена — допишите {{signer_position}} вручную")
 
+    numbered = strip_numbering(document)
+    if numbered:
+        report.append(f"снята нумерация с абзацев: {numbered}")
+
     Path(target).parent.mkdir(parents=True, exist_ok=True)
     document.save(target)
     return report
 
 
+def show(template: str) -> int:
+    """Показать, что в шаблоне размечено — когда письмо выходит не таким."""
+    import docx
+
+    document = docx.Document(template)
+    print(f"Шаблон: {template}")
+    print()
+    for i, paragraph in enumerate(document.paragraphs):
+        text = paragraph.text.strip()
+        if text:
+            print(f"  {i:3} {text[:90]}")
+    for ti, table in enumerate(document.tables):
+        for row in table.rows:
+            for cell in row.cells:
+                joined = " | ".join(p.text.strip() for p in cell.paragraphs
+                                    if p.text.strip())
+                if joined:
+                    print(f"  [таблица {ti}] {joined[:90]}")
+    print()
+    found = {key for key in PLACEHOLDERS
+             if "{{" + key + "}}" in docx.Document(template).element.xml}
+    missing = [key for key in PLACEHOLDERS if key not in found]
+    print("Найдены подстановки:", ", ".join(sorted(found)) or "ни одной")
+    if missing:
+        print("Отсутствуют:", ", ".join(missing))
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--show":
+        return show(sys.argv[2])
     if len(sys.argv) != 3:
         print(__doc__)
         return 1
