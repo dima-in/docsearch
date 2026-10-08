@@ -429,3 +429,92 @@ def test_default_intro_has_the_usual_wording():
     head = letters.Letterhead.from_config({})
     assert "{{recipient_org}}" in head.intro
     assert "заключен договор" in head.intro
+
+
+def test_intro_includes_object_and_contract():
+    """Полная преамбула так, как её пишут в письмах."""
+    filled = letters.fill_intro(letters.DEFAULT_INTRO, {
+        "recipient_org": "ООО «Мосренстрой-6»",
+        "own_org": "ООО «ФБ-Строй»",
+        "contract": "№ЛС-СМР-Тайн от 18.05.2023",
+        "object": "«Жилой дом по адресу: Тайнинская ул., вл.16, корп. 3»",
+    })
+    assert filled.startswith("Между ООО «Мосренстрой-6» и ООО «ФБ-Строй» "
+                             "заключен договор подряда №ЛС-СМР-Тайн")
+    assert "по объекту строительства: «Жилой дом" in filled
+    assert filled.endswith("корп. 3».")
+
+
+def test_intro_leaves_no_dangling_punctuation():
+    """Незаполненный объект не должен оставить висящее двоеточие."""
+    filled = letters.fill_intro(letters.DEFAULT_INTRO, {
+        "recipient_org": "ООО «Х»", "own_org": "ООО «Y»"})
+    assert filled.endswith("по объекту строительства.")
+    assert ": ." not in filled
+    assert "  " not in filled
+
+
+def test_server_builds_intro_when_form_did_not(tmp_path: Path):
+    template = make_template(tmp_path / "бланк.docx")
+    head = letters.Letterhead.from_config({
+        **HEAD, "template": str(template),
+        "object": "«Жилой дом, Тайнинская ул., вл.16, корп. 3»",
+    })
+    lines = read_all(letters.render({
+        "recipient_org": "ООО «Мосренстрой-6»",
+        "contract": "№ЛС-СМР-Тайн от 18.05.2023",
+        "body": "Суть письма.",
+    }, head))
+    assert any("заключен договор подряда №ЛС-СМР-Тайн" in line for line in lines)
+    assert any("Тайнинская ул., вл.16, корп. 3" in line for line in lines)
+
+
+def test_body_paragraphs_are_plain_by_default():
+    assert letters.format_body("Первый.\nВторой.") == ["Первый.", "Второй."]
+
+
+def test_body_can_be_numbered():
+    assert letters.format_body("Первый.\nВторой.", "list") == \
+        ["1. Первый.", "2. Второй."]
+
+
+def test_empty_body():
+    assert letters.format_body("") == [""]
+    assert letters.format_body("", "list") == [""]
+
+
+def test_intro_is_not_numbered(tmp_path: Path):
+    """Преамбула — не пункт списка, нумерация начинается с текста."""
+    template = make_template(tmp_path / "бланк.docx")
+    head = letters.Letterhead.from_config({**HEAD, "template": str(template)})
+    lines = read_all(letters.render({
+        "recipient_org": "ООО «Х»",
+        "intro": "Между сторонами заключен договор.",
+        "body": "Первое требование.\nВторое требование.",
+        "body_format": "list",
+    }, head))
+    assert "Между сторонами заключен договор." in lines
+    assert "1. Первое требование." in lines
+    assert "2. Второе требование." in lines
+
+
+def test_numbering_is_limited_to_the_letters_folder(tmp_path: Path):
+    """Номера живут в папке переписки: по всему архиву ловится посторонняя
+    нумерация, из-за неё счётчик и улетал."""
+    root = tmp_path / "arc"
+    (root / "02 .Переписка (Письма)").mkdir(parents=True)
+    (root / "Проекты").mkdir()
+    (root / "02 .Переписка (Письма)" / "Исх РТП-175.txt").write_text(
+        "Исх. РТП-175 от 19.03.2024 г.", encoding="utf-8")
+    (root / "Проекты" / "РТП-9000.txt").write_text(
+        "Исх. РТП-9000 от 01.01.2024 г.", encoding="utf-8")
+
+    cfg = Config(roots=[Root(label="ПТО", path=str(root))],
+                 db=str(tmp_path / "index.db"), letterhead=HEAD)
+    conn = db.connect(cfg.db)
+    try:
+        indexer.run(conn, cfg)
+        assert letters.next_number(conn, "РТП") == "РТП-9001"
+        assert letters.next_number(conn, "РТП", "Переписка") == "РТП-176"
+    finally:
+        conn.close()

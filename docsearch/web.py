@@ -199,8 +199,10 @@ def create_app(cfg: Config) -> FastAPI:
         conn = connect()
         try:
             return JSONResponse({
-                "number": letters.next_number(conn, head.number_prefix),
-                "number_after": letters.previous_number(conn, head.number_prefix),
+                "number": letters.next_number(conn, head.number_prefix,
+                                              head.number_folder),
+                "number_after": letters.previous_number(
+                    conn, head.number_prefix, head.number_folder),
                 "date": date.today().isoformat(),
                 "recipients": letters.recipients(conn),
                 "signer_position": head.signer_position,
@@ -208,6 +210,7 @@ def create_app(cfg: Config) -> FastAPI:
                 "letterhead": head.header_lines(),
                 "intro_template": head.intro,
                 "own_org": cfg.own_org or head.name,
+                "object": head.object,
             })
         finally:
             conn.close()

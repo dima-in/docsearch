@@ -117,6 +117,9 @@
   .combo li b { font-weight: 600; }
   .combo li span { color: var(--muted); font-size: 13px; }
   .combo li i { margin-left: auto; color: var(--muted); font-size: 12px; font-style: normal; }
+  .body-style { display: flex; gap: 14px; align-items: center; margin-top: 6px;
+                font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+  .body-style label { display: flex; gap: 5px; align-items: center; cursor: pointer; }
   .hint-inline { color: var(--muted); font-size: 12px; margin-left: 10px; }
   .card-form .hint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
   .edited { background: #eaf7ec; color: #1c6b2c; border-radius: 4px; padding: 1px 7px; font-size: 12px; }
@@ -177,8 +180,16 @@
     <label for="l-contract">Договор</label><input id="l-contract" placeholder="№ЛС-СМР-Тайн от 18.05.2023">
     <label for="l-subject">Тема</label><input id="l-subject">
     <label for="l-greeting">Обращение</label><input id="l-greeting" placeholder="Уважаемый Александр Вадимович!">
-    <label for="l-intro">Преамбула</label><textarea id="l-intro" rows="3" placeholder="подставится по организации и договору"></textarea>
-    <label for="l-body">Текст</label><textarea id="l-body" rows="8"></textarea>
+    <label for="l-intro">Преамбула</label><textarea id="l-intro" rows="5" placeholder="подставится по организации и договору"></textarea>
+    <label for="l-body">Текст</label>
+    <span>
+      <textarea id="l-body" rows="8"></textarea>
+      <span class="body-style">
+        <label><input type="radio" name="body-format" value="text" checked> обычные абзацы</label>
+        <label><input type="radio" name="body-format" value="list"> нумерованный список</label>
+        <span class="hint-inline">каждая строка — отдельный пункт</span>
+      </span>
+    </span>
     <label for="l-signer-position">Подписант</label><input id="l-signer-position">
     <label for="l-signer-name">ФИО подписанта</label><input id="l-signer-name">
     <div class="row">
@@ -497,6 +508,7 @@ let knownRecipients = [];
 
 let introTemplate = "";
 let ownOrg = "";
+let buildObject = "";
 
 const LETTER_FIELDS = ["number", "date", "recipient_position", "recipient_org",
   "recipient_person", "subject", "reference", "greeting", "intro", "body",
@@ -517,11 +529,14 @@ async function openLetter() {
   knownRecipients = draft.recipients || [];
   introTemplate = draft.intro_template || "";
   ownOrg = draft.own_org || "";
+  buildObject = draft.object || "";
   for (const id of ["l-recipient", "l-recipient-org", "l-recipient-person",
                     "l-recipient-position", "l-contract", "l-intro"]) {
     document.getElementById(id).value = "";
   }
   document.getElementById("l-intro").dataset.touched = "";
+  const plain = document.querySelector('input[name="body-format"][value="text"]');
+  if (plain) plain.checked = true;
   document.getElementById("letter-status").textContent = "";
   document.getElementById("letter").showModal();
 }
@@ -552,6 +567,8 @@ async function buildLetter() {
     const input = document.getElementById("l-" + field.replace(/_/g, "-"));
     if (input) body[field] = input.value.trim();
   }
+  const chosenFormat = document.querySelector('input[name="body-format"]:checked');
+  body.body_format = chosenFormat ? chosenFormat.value : "text";
   if (!body.recipient_org) {
     document.getElementById("letter-status").textContent = "Укажите, кому письмо";
     return;
@@ -676,13 +693,19 @@ function updateIntro() {
   const field = document.getElementById("l-intro");
   if (field.dataset.touched === "1") return;
   const org = document.getElementById("l-recipient-org").value;
-  const contract = document.getElementById("l-contract").value;
   if (!introTemplate || !org) return;
+  const values = {
+    recipient_org: org,
+    own_org: ownOrg,
+    contract: document.getElementById("l-contract").value,
+    object: buildObject,
+  };
+  // следов от незаполненных полей остаться не должно: письмо уходит наружу
   field.value = introTemplate
-    .replace(/{{\s*recipient_org\s*}}/g, org)
-    .replace(/{{\s*own_org\s*}}/g, ownOrg)
-    .replace(/{{\s*contract\s*}}/g, contract || "")
-    .replace(/\s+/g, " ")
+    .replace(/{{\s*(\w+)\s*}}/g, (_, key) => values[key] || "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,;])/g, "$1")
+    .replace(/[:,]\s*\./g, ".")
     .trim();
 }
 

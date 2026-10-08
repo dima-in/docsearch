@@ -29,8 +29,11 @@ MONTHS_GENITIVE = [
 
 # Первый абзац в письмах повторяется слово в слово, меняются только
 # организация и договор. Держим его шаблоном, а не копипастой.
-DEFAULT_INTRO = ("Между {{recipient_org}} и {{own_org}} заключен договор "
-                 "подряда {{contract}}.")
+DEFAULT_INTRO = (
+    "Между {{recipient_org}} и {{own_org}} заключен договор подряда "
+    "{{contract}} на выполнение подрядных работ по объекту строительства: "
+    "{{object}}."
+)
 
 
 @dataclass
@@ -49,7 +52,9 @@ class Letterhead:
     signer_name: str = ""
     number_prefix: str = ""
     template: str = ""
+    number_folder: str = ""
     intro: str = DEFAULT_INTRO
+    object: str = ""
     extra_lines: list = field(default_factory=list)
 
     @classmethod
@@ -69,7 +74,9 @@ class Letterhead:
             signer_name=raw.get("signer_name", ""),
             number_prefix=raw.get("number_prefix", ""),
             template=raw.get("template", ""),
+            number_folder=raw.get("number_folder", ""),
             intro=raw.get("intro", DEFAULT_INTRO),
+            object=raw.get("object", ""),
             extra_lines=list(raw.get("extra_lines", [])),
         )
 
@@ -118,14 +125,22 @@ MAX_GAP = 100
 MIN_SAMPLE = 5
 
 
-def numbers_for(conn: sqlite3.Connection, prefix: str) -> list[int]:
-    """Все номера с этим префиксом, по возрастанию."""
+def numbers_for(conn: sqlite3.Connection, prefix: str,
+                folder: str = "") -> list[int]:
+    """Все номера с этим префиксом, по возрастанию.
+
+    Если указана папка исходящих, считаем только по ней: номера живут
+    там, а по всему архиву в выборку попадает посторонняя нумерация.
+    """
     wanted = prefix.strip().lower()
+    sql = ("SELECT doc_number FROM documents"
+           " WHERE doc_number IS NOT NULL AND doc_number != ''")
+    params: list = []
+    if folder:
+        sql += " AND ru_lower(rel_path) LIKE ?"
+        params.append(f"%{folder.lower()}%")
     found = []
-    for row in conn.execute(
-        "SELECT doc_number FROM documents"
-        " WHERE doc_number IS NOT NULL AND doc_number != ''"
-    ):
+    for row in conn.execute(sql, params):
         parsed = parse_number(row["doc_number"])
         if not parsed:
             continue
@@ -152,19 +167,21 @@ def highest_sane(numbers: list[int], max_gap: int = MAX_GAP) -> int:
     return numbers[0]
 
 
-def next_number(conn: sqlite3.Connection, prefix: str) -> str:
+def next_number(conn: sqlite3.Connection, prefix: str,
+                folder: str = "") -> str:
     """Следующий свободный номер по этому префиксу.
 
     Максимум берём из самого архива: журнал исходящих вести отдельно
     никто не станет, а письма в папке — это и есть журнал.
     """
-    highest = highest_sane(numbers_for(conn, prefix))
+    highest = highest_sane(numbers_for(conn, prefix, folder))
     return f"{prefix}-{highest + 1}" if prefix else str(highest + 1)
 
 
-def previous_number(conn: sqlite3.Connection, prefix: str) -> str:
+def previous_number(conn: sqlite3.Connection, prefix: str,
+                    folder: str = "") -> str:
     """От какого номера считается следующий — чтобы ошибку было видно сразу."""
-    highest = highest_sane(numbers_for(conn, prefix))
+    highest = highest_sane(numbers_for(conn, prefix, folder))
     if not highest:
         return ""
     return f"{prefix}-{highest}" if prefix else str(highest)
@@ -326,13 +343,26 @@ def _fill(paragraph, context: dict) -> None:
     _set_text(paragraph, filled)
 
 
-def _expand_body(paragraph, body: str) -> None:
-    """Многострочный текст письма — несколько абзацев с тем же оформлением."""
+def format_body(body: str, style: str = "text") -> list[str]:
+    """Разбить текст письма на абзацы.
+
+    Нумерацию не навязываем: в большинстве писем это обычные абзацы, а
+    список нужен, когда перечисляют требования или вопросы.
+    """
+    lines = [line.strip() for line in (body or "").split(chr(10))]
+    lines = [line for line in lines if line]
+    if not lines:
+        return [""]
+    if style == "list":
+        return [f"{i}. {line}" for i, line in enumerate(lines, 1)]
+    return lines
+
+
+def _expand_body(paragraph, lines: list[str]) -> None:
+    """Несколько абзацев с оформлением исходного."""
     import copy
 
-    lines = [line.strip() for line in (body or "").split(chr(10))]
-    lines = [line for line in lines if line] or [""]
-
+    lines = lines or [""]
     _set_text(paragraph, lines[0])
     anchor = paragraph._element
     for line in lines[1:]:
@@ -367,18 +397,27 @@ def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes
     for key in ("signer_position", "signer_name"):
         context[key] = context.get(key) or getattr(head, key)
 
-    body_text = context.pop("body", "")
+    body_lines = format_body(context.pop("body", ""),
+                             context.pop("body_format", "text"))
     intro = (context.get("intro") or "").strip()
+    if not intro and head.intro:
+        intro = fill_intro(head.intro, {
+            "recipient_org": context.get("recipient_org", ""),
+            "own_org": head.name,
+            "contract": context.get("contract", ""),
+            "object": head.object,
+        })
+        context["intro"] = intro
     has_intro_slot = "{{intro}}" in _all_text(document)
     if intro and not has_intro_slot:
         # в бланке нет отдельного места под преамбулу — ставим её первым
-        # абзацем текста, как в письмах и написано
-        body_text = intro + (chr(10) + body_text if body_text else "")
+        # абзацем, и нумерация списка на неё не распространяется
+        body_lines = [intro] + [line for line in body_lines if line]
 
     def walk(parent):
         for paragraph in parent.paragraphs:
             if "{{body}}" in paragraph.text or "{{ body }}" in paragraph.text:
-                _expand_body(paragraph, body_text)
+                _expand_body(paragraph, body_lines)
             else:
                 _fill(paragraph, context)
         for table in parent.tables:
@@ -471,6 +510,23 @@ def find_contract(text: str) -> str | None:
     if not match:
         return None
     return f"№{match.group(1)} от {match.group(2)}"
+
+
+RE_EMPTY_TAIL = re.compile(r"\s*[:,]?\s*(?=[.;]|$)")
+
+
+def fill_intro(template: str, values: dict) -> str:
+    """Собрать преамбулу, не оставив следов от незаполненных полей.
+
+    Если объект или договор не заданы, в предложении не должно остаться
+    висящего двоеточия: письмо уходит наружу, и такое сразу заметят.
+    """
+    text = PLACEHOLDER.sub(
+        lambda m: str(values.get(m.group(1), "") or ""), template or "")
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"\s+([.,;])", lambda m: m.group(1), text)
+    text = re.sub(r"[:,]\s*\.", ".", text)
+    return text.strip()
 
 
 def search_key(*parts: str) -> str:

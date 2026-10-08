@@ -53,6 +53,8 @@ letterhead:
   signer_position: ""
   signer_name: ""
   number_prefix: ""
+  number_folder: ""
+  object: ""
 """
 
 
