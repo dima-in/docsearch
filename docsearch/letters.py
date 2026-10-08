@@ -558,13 +558,55 @@ def search_key(*parts: str) -> str:
     return f"{text} {lemmas}"
 
 
-def rebuild_contacts(conn, progress=None) -> list[dict]:
+def org_key(name: str) -> str:
+    """Ключ организации для сведения написаний.
+
+    «ПД-Проект» и «ПД-ПРОЕКТ», «Проф/Люкс» и «ПрофЛюкс», «СК АВАНГАРД» и
+    «СК-Авангард» — одна организация. Отбрасываем форму собственности,
+    регистр и всю пунктуацию: остаётся само название.
+    """
+    from . import meta
+
+    core = meta.strip_form(name or "")
+    return re.sub(r"[^0-9a-zа-яё]+", "", core.lower())
+
+
+def person_key(person: str) -> str:
+    """Ключ человека: фамилия меняет падеж от письма к письму.
+
+    «Глоба А. В.» и «Глобу А. В.» — один человек. Сравниваем по началу
+    фамилии и инициалам: лемматизация фамилий ненадёжна.
+    """
+    if not person:
+        return ""
+    from . import morph
+
+    parts = person.replace(".", " ").split()
+    if not parts:
+        return ""
+    base = morph.surname(parts[0])
+    initials = "".join(p[0].lower() for p in parts[1:] if p)
+    return f"{base}{initials}"
+
+
+def _most_common(values: list[str]) -> str | None:
+    """Самое частое написание — его и показываем."""
+    from collections import Counter
+
+    cleaned = [v for v in values if v]
+    if not cleaned:
+        return None
+    return Counter(cleaned).most_common(1)[0][0]
+
+
+def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[dict]:
     """Собрать справочник адресатов, пройдя по переписке.
 
     У организации бывает несколько адресатов, поэтому ключ — пара
     «организация + человек». Побеждает самое свежее письмо: должности
     меняются, и писать надо тому, кто занимает её сейчас.
     """
+    own = org_key(own_org or "")
     found: dict[tuple, dict] = {}
     contracts: dict[str, str] = {}
     seen = 0
@@ -573,44 +615,61 @@ def rebuild_contacts(conn, progress=None) -> list[dict]:
         if progress and seen % 500 == 0:
             progress(seen, len(found))
         body = row["body"] or ""
+
         contract = find_contract(body)
         if contract and row["counterparty"]:
             # основание есть в первом абзаце любого письма, даже если блок
             # «кому» не разобрался: оформление бланков у всех разное
-            contracts.setdefault(row["counterparty"], contract)
+            contracts.setdefault(org_key(row["counterparty"]), contract)
 
         parsed = parse_addressee(body)
         if not parsed:
             continue
-        key = (parsed["org"], parsed["person"] or "")
+        key_org = org_key(parsed["org"])
+        if own and key_org == own:
+            # это входящее: адресат — мы сами, в справочнике ему не место
+            continue
+        if contract:
+            contracts.setdefault(key_org, contract)
+
+        key = (key_org, person_key(parsed["person"] or ""))
         entry = found.setdefault(key, {
-            "org": parsed["org"], "person": parsed["person"] or "",
-            "position": None, "contract": None,
-            "letters": 0, "last_date": None,
+            "orgs": [], "persons": [], "positions": [],
+            "letters": 0, "last_date": None, "contract": None,
         })
         entry["letters"] += 1
-        # письма идут от свежих к старым, поэтому первое и есть актуальное
-        if entry["position"] is None:
-            entry["position"] = parsed["position"]
+        entry["orgs"].append(parsed["org"])
+        entry["persons"].append(parsed["person"] or "")
+        entry["positions"].append(parsed["position"] or "")
+        # письма идут от свежих к старым, первое и есть актуальное
+        if entry["last_date"] is None:
             entry["last_date"] = row["doc_date"]
         if entry["contract"] is None:
             entry["contract"] = contract
 
-    rows = sorted(found.values(), key=lambda e: -e["letters"])
+    rows = []
+    for (key_org, _), entry in found.items():
+        rows.append({
+            "org": _most_common(entry["orgs"]),
+            "person": _most_common(entry["persons"]) or "",
+            "position": _most_common(entry["positions"]),
+            "contract": entry["contract"] or contracts.get(key_org),
+            "letters": entry["letters"],
+            "last_date": entry["last_date"],
+        })
+    rows.sort(key=lambda e: -e["letters"])
     for entry in rows:
-        if not entry["contract"]:
-            entry["contract"] = contracts.get(entry["org"])
         entry["search_key"] = search_key(entry["org"], entry["person"],
                                          entry["position"])
     db.save_contacts(conn, rows)
     return rows
 
 
-def recipients(conn) -> list[dict]:
+def recipients(conn, own_org: str | None = None) -> list[dict]:
     """Адресаты для формы письма. Если справочник пуст — собрать на месте."""
     known = db.contacts(conn)
     if not known:
-        rebuild_contacts(conn)
+        rebuild_contacts(conn, own_org=own_org)
         known = db.contacts(conn)
     if known:
         return known

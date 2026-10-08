@@ -88,3 +88,36 @@ def test_aliases_merge_spellings():
             assert meta.find_organizations(variant) == ["ООО " + chr(171) + "СКМ" + chr(187)]
     finally:
         meta.set_aliases({})
+
+
+def test_org_key_merges_spellings():
+    """Регистр, пробелы и пунктуация в названии — не разные организации."""
+    from docsearch import letters
+
+    assert letters.org_key("ООО «ПД-Проект»") == letters.org_key("ООО «ПД-ПРОЕКТ»")
+    assert letters.org_key("ООО «Проф/Люкс»") == letters.org_key("ООО «ПрофЛюкс»")
+    assert letters.org_key("ООО «СК АВАНГАРД»") == letters.org_key("ООО «СК-Авангард»")
+    assert letters.org_key("ООО «ФБ-Строй»") == letters.org_key("АО «ФБ-СТРОЙ»")
+
+
+def test_org_key_keeps_different_companies_apart():
+    from docsearch import letters
+
+    assert letters.org_key("ООО «Мосренстрой-6»") != letters.org_key("ООО «Мосренстрой»")
+    assert letters.org_key("ООО «ЕЛ»") != letters.org_key("ООО «ЮНИК»")
+
+
+def test_person_key_ignores_case_of_surname():
+    """Фамилия в письме стоит в дательном падеже, в справочнике нужна одна."""
+    from docsearch import letters
+
+    assert letters.person_key("Глоба А. В.") == letters.person_key("Глобу А. В.")
+    assert letters.person_key("Лосеву С.В.") == letters.person_key("Лосев С.В.")
+    assert letters.person_key("Вороновой М.А.") == letters.person_key("Воронова М.А.")
+
+
+def test_person_key_keeps_different_people_apart():
+    from docsearch import letters
+
+    assert letters.person_key("Иванову И.И.") != letters.person_key("Иваненко И.И.")
+    assert letters.person_key("Лосеву С.В.") != letters.person_key("Лосеву А.В.")

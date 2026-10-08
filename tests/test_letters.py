@@ -651,3 +651,66 @@ def test_contract_attached_without_parsed_addressee(env):
     rows = letters.rebuild_contacts(conn)
     found = {r["org"]: r for r in rows}
     assert found["ООО «НЛ Групп»"]["contract"] == "№НЛ-17 от 03.04.2024"
+
+
+def _letter_body(position, org, person, contract=None):
+    lines = [position, org, person]
+    if contract:
+        lines.append(f"Между {org} и ООО «ФБ-Строй» заключен договор подряда"
+                     f" {contract} на выполнение работ")
+    return chr(10).join(lines)
+
+
+def _put(conn, doc_id, body, counterparty=None):
+    conn.execute("UPDATE documents SET section='переписка', doc_type='письмо',"
+                 " counterparty=? WHERE id=?", (counterparty, doc_id))
+    conn.execute("DELETE FROM doc_fts WHERE rowid = ?", (doc_id,))
+    conn.execute("INSERT INTO doc_fts (rowid, name, body, lemmas)"
+                 " VALUES (?,?,?,?)", (doc_id, "письмо", body, body))
+
+
+def test_contacts_merge_spelling_variants(env):
+    """В справочнике одна организация должна быть одной строкой."""
+    conn, cfg = env
+    ids = [r["id"] for r in conn.execute("SELECT id FROM documents LIMIT 2")]
+    _put(conn, ids[0], _letter_body("Генеральному директору",
+                                    "ООО «ПД-Проект»", "Демину А.А."))
+    _put(conn, ids[1], _letter_body("Генеральному директору",
+                                    "ООО «ПД-ПРОЕКТ»", "Демин А.А."))
+    conn.commit()
+
+    rows = letters.rebuild_contacts(conn)
+    assert len(rows) == 1
+    assert rows[0]["letters"] == 2
+
+
+def test_own_organization_is_not_an_addressee(env):
+    """Входящие письма адресованы нам — в справочнике адресатов нам не место."""
+    conn, cfg = env
+    ids = [r["id"] for r in conn.execute("SELECT id FROM documents LIMIT 2")]
+    _put(conn, ids[0], _letter_body("Генеральному директору",
+                                    "ООО «ФБ-Строй»", "Глухову А.В."))
+    _put(conn, ids[1], _letter_body("Генеральному директору",
+                                    "ООО «НЛ-ГРУПП»", "Пану В.А."))
+    conn.commit()
+
+    rows = letters.rebuild_contacts(conn, own_org="ФБ-Строй")
+    orgs = [r["org"] for r in rows]
+    assert "ООО «НЛ-ГРУПП»" in orgs
+    assert not any("ФБ" in org for org in orgs)
+
+
+def test_contract_shared_across_spellings(env):
+    """Договор найден в письме с одним написанием — нужен и при другом."""
+    conn, cfg = env
+    ids = [r["id"] for r in conn.execute("SELECT id FROM documents LIMIT 2")]
+    _put(conn, ids[0], _letter_body("Генеральному директору",
+                                    "ООО «СК АВАНГАРД»", "Вороновой М.А.",
+                                    "№СКА-5 от 10.01.2025"))
+    _put(conn, ids[1], _letter_body("Генеральному директору",
+                                    "ООО «СК-Авангард»", "Воронова М.А."))
+    conn.commit()
+
+    rows = letters.rebuild_contacts(conn)
+    assert len(rows) == 1
+    assert rows[0]["contract"] == "№СКА-5 от 10.01.2025"

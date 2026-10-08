@@ -643,7 +643,7 @@ def cmd_contacts(args) -> int:
                     print(f"  просмотрено {seen}, найдено {found}",
                           end=chr(13), flush=True)
 
-            rows = letters.rebuild_contacts(conn, progress)
+            rows = letters.rebuild_contacts(conn, progress, cfg.own_org)
             if _interactive():
                 print(" " * 70, end=chr(13))
             print(f"[{_stamp()}] Сделал: адресатов {len(rows)}")
@@ -652,12 +652,19 @@ def cmd_contacts(args) -> int:
         if not known:
             print("Адресатов не нашлось — в индексе нет разобранной переписки")
             return 1
+        with_contract = sum(1 for i in known if i["contract"])
+        without_person = sum(1 for i in known if not i["person"])
+        print()
+        print(f"Адресатов {len(known)}: с договором {with_contract}, "
+              f"без фамилии {without_person}")
         print()
         for item in known:
-            person = item["person"] or ""
+            person = item["person"] or "фамилия не разобрана"
             print(f"  {item['org']}")
             print(f"    {item['position'] or '—'}   {person}"
                   f"   писем {item['letters']}")
+            if item["contract"]:
+                print(f"    договор {item['contract']}")
         return 0
     finally:
         conn.close()
