@@ -797,3 +797,61 @@ def test_stray_numbering_cleaned_at_render(tmp_path: Path):
         if pPr is not None:
             assert pPr.find(qn("w:numPr")) is None
         assert "List" not in (paragraph.style.name or "")
+
+
+INCOMING = chr(10).join([
+    "№ 114-25/ИСХ от 19.11.25",
+    "Генеральному директору",
+    "ГУП «МОСВОДОСТОК»",
+    "Ишханяну К.Р.",
+    "Уважаемый Константин Рафаэлович!",
+    "Общество с ограниченной ответственностью «ЕРЛУК» выполняет работы"
+    " по объекту строительства.",
+    "Генеральный директор А.М. Лукашин",
+])
+
+
+def test_sender_parsed_from_signature():
+    """Входящее письмо даёт контрагента, которому мы не писали."""
+    sender = letters.parse_sender(INCOMING, "ФБ-Строй", "ГУП «МОСВОДОСТОК»")
+    assert sender["org"] == "ООО «ЕРЛУК»"
+    assert sender["person"] == "Лукашину А.М."
+    assert sender["position"] == "Генеральному директору"
+
+
+def test_sender_is_converted_to_addressee_form():
+    """В подписи именительный падеж и инициалы впереди — в адресате наоборот."""
+    person, position = letters.to_addressee_form("А.М. Лукашин",
+                                                 "Генеральный директор")
+    assert person == "Лукашину А.М."
+    assert position == "Генеральному директору"
+
+    person, _ = letters.to_addressee_form("Воронова М.А.", "Директор")
+    assert person == "Вороновой М.А."
+
+
+def test_position_tail_is_not_inflected():
+    """«Руководитель проекта»: склоняется только главное слово."""
+    _, position = letters.to_addressee_form("А.А. Иванов", "Руководитель проекта")
+    assert position == "Руководителю проекта"
+
+
+def test_sender_skips_us_and_the_addressee():
+    assert letters.parse_sender(INCOMING, "ЕРЛУК", "ГУП «МОСВОДОСТОК»") is None
+
+
+def test_letter_without_signature_has_no_sender():
+    assert letters.parse_sender("Просто текст без подписи", "ФБ-Строй") is None
+
+
+def test_incoming_letter_adds_its_sender(env):
+    conn, cfg = env
+    doc_id = conn.execute("SELECT MIN(id) id FROM documents").fetchone()["id"]
+    _put(conn, doc_id, INCOMING)
+    conn.commit()
+
+    rows = letters.rebuild_contacts(conn, own_org="ФБ-Строй")
+    orgs = {r["org"]: r for r in rows}
+    assert "ООО «ЕРЛУК»" in orgs
+    assert orgs["ООО «ЕРЛУК»"]["person"] == "Лукашину А.М."
+    assert "ГУП «МОСВОДОСТОК»" in orgs       # адресат тоже на месте

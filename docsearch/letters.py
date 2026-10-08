@@ -695,17 +695,119 @@ def _most_common(values: list[str]) -> str | None:
     return Counter(cleaned).most_common(1)[0][0]
 
 
+TAIL_LIMIT = 1200     # подпись стоит в конце письма
+
+# Должность в подписи стоит в именительном: «Генеральный директор»
+POSITIONS = ("Генеральный|Исполнительный|Технический|Финансовый|Коммерческий|"
+             "Главный|Первый|Заместитель|Директор|Руководитель|Начальник|"
+             "Управляющий|Президент")
+
+# Подпись: «Генеральный директор А.М. Лукашин» или «... Лукашин А.М.»
+RE_SIGNATURE = re.compile(
+    r"^\s*(?P<position>(?:" + POSITIONS + r")[^\n]{0,50}?)[ \t]+"
+    r"(?P<person>[А-ЯЁ]\.\s?[А-ЯЁ]\.\s*[А-ЯЁ][а-яё-]{2,30}"
+    r"|[А-ЯЁ][а-яё-]{2,30}\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.)\s*$",
+    re.MULTILINE,
+)
+
+RE_INITIALS_FIRST = re.compile(
+    r"^([А-ЯЁ]\.\s?[А-ЯЁ]\.)\s*([А-ЯЁ][а-яё-]{2,30})$"
+)
+
+
+def to_addressee_form(person: str, position: str) -> tuple[str, str]:
+    """Подпись отправителя привести к виду адресата.
+
+    В подписи «Генеральный директор А.М. Лукашин» — именительный падеж и
+    инициалы впереди. В адресате письма нужно «Генеральному директору
+    Лукашину А.М.»: иначе сгенерированное письмо уйдёт с ошибкой.
+    """
+    from . import morph
+
+    person = " ".join((person or "").split())
+    match = RE_INITIALS_FIRST.match(person)
+    if match:
+        initials, surname = match.group(1), match.group(2)
+    else:
+        parts = person.split()
+        surname = parts[0] if parts else ""
+        initials = " ".join(parts[1:])
+
+    if surname:
+        surname = morph.to_dative(surname)
+    return (f"{surname} {initials}".strip(),
+            morph.phrase_to_dative(position or ""))
+
+
+def parse_sender(text: str, own_org: str | None = None,
+                 addressee_org: str | None = None) -> dict | None:
+    """Кто прислал письмо: организация, должность и человек из подписи.
+
+    Входящие письма дают контрагентов, которых среди адресатов нет: если
+    мы им ни разу не писали, в справочнике их не было вовсе.
+    """
+    from . import meta
+
+    body = text or ""
+    tail = body[-TAIL_LIMIT:] if len(body) > TAIL_LIMIT else body
+    match = RE_SIGNATURE.search(tail.replace(" | ", chr(10)))
+    if not match:
+        return None
+
+    own = org_key(own_org or "")
+    skip = {org_key(addressee_org or "")}
+    if own:
+        skip.add(own)
+    skip.discard("")
+
+    organizations = meta.find_organizations(body[:HEAD_LIMIT], limit=8)
+    organizations += meta.find_organizations(tail, limit=8)
+    sender = next((org for org in organizations if org_key(org) not in skip),
+                  None)
+    if not sender:
+        return None
+
+    person, position = to_addressee_form(match.group("person"),
+                                         match.group("position"))
+    return {"org": sender, "position": position, "person": person}
+
+
 def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[dict]:
-    """Собрать справочник адресатов, пройдя по переписке.
+    """Собрать справочник по переписке — и по адресатам, и по отправителям.
 
     У организации бывает несколько адресатов, поэтому ключ — пара
     «организация + человек». Побеждает самое свежее письмо: должности
     меняются, и писать надо тому, кто занимает её сейчас.
+
+    Входящие письма дают контрагентов, которым мы ни разу не писали: без
+    них в справочнике не было бы целых организаций.
     """
     own = org_key(own_org or "")
     found: dict[tuple, dict] = {}
     contracts: dict[str, str] = {}
     seen = 0
+
+    def remember(who: dict, date: str | None, contract_party: str | None,
+                 contract: str | None) -> None:
+        key_org = org_key(who["org"])
+        if own and key_org == own:
+            return
+        key = (key_org, person_key(who["person"] or ""))
+        entry = found.setdefault(key, {
+            "orgs": [], "persons": [], "positions": [],
+            "letters": 0, "last_date": None, "contract": None,
+        })
+        entry["letters"] += 1
+        entry["orgs"].append(who["org"])
+        entry["persons"].append(who["person"] or "")
+        entry["positions"].append(who["position"] or "")
+        # письма идут от свежих к старым, первое и есть актуальное
+        if entry["last_date"] is None:
+            entry["last_date"] = date
+        if entry["contract"] is None and contract_party \
+                and org_key(contract_party) == key_org:
+            entry["contract"] = contract
+
     for row in db.correspondence_bodies(conn):
         seen += 1
         if progress and seen % 500 == 0:
@@ -718,28 +820,14 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
         if party and contract:
             contracts.setdefault(org_key(party), contract)
 
-        parsed = parse_addressee(body)
-        if not parsed:
-            continue
-        key_org = org_key(parsed["org"])
-        if own and key_org == own:
-            # это входящее: адресат — мы сами, в справочнике ему не место
-            continue
+        addressee = parse_addressee(body)
+        if addressee:
+            remember(addressee, row["doc_date"], party, contract)
 
-        key = (key_org, person_key(parsed["person"] or ""))
-        entry = found.setdefault(key, {
-            "orgs": [], "persons": [], "positions": [],
-            "letters": 0, "last_date": None, "contract": None,
-        })
-        entry["letters"] += 1
-        entry["orgs"].append(parsed["org"])
-        entry["persons"].append(parsed["person"] or "")
-        entry["positions"].append(parsed["position"] or "")
-        # письма идут от свежих к старым, первое и есть актуальное
-        if entry["last_date"] is None:
-            entry["last_date"] = row["doc_date"]
-        if entry["contract"] is None and party and org_key(party) == key_org:
-            entry["contract"] = contract
+        sender = parse_sender(body, own_org,
+                              addressee["org"] if addressee else None)
+        if sender:
+            remember(sender, row["doc_date"], party, contract)
 
     rows = []
     for (key_org, _), entry in found.items():

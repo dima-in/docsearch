@@ -90,3 +90,72 @@ def surname(word: str) -> str:
     if len(_surname_cache) < 50_000:
         _surname_cache[word] = result
     return result
+
+
+# Женские фамилии: род по окончанию, иначе разбор выдаёт мужской и
+# «Воронова» склоняется в «Воронову» вместо «Вороновой»
+FEMININE_ENDINGS = ("ова", "ева", "ина", "ына", "ская", "цкая", "ая", "яя")
+
+
+def to_dative(word: str) -> str:
+    """Слово в дательном падеже: «Лукашин» -> «Лукашину».
+
+    В подписи отправителя фамилия и должность стоят в именительном, а в
+    адресате письма нужен дательный.
+    """
+    analyzer = _get_analyzer()
+    if analyzer is None or not word:
+        return word
+    try:
+        parses = analyzer.parse(word)
+        wanted_female = word.lower().endswith(FEMININE_ENDINGS)
+
+        def pick(predicate):
+            return next((p for p in parses if predicate(p)), None)
+
+        best = None
+        if wanted_female:
+            best = pick(lambda p: "Surn" in p.tag and "femn" in p.tag)
+        if best is None:
+            best = pick(lambda p: "Surn" in p.tag)
+        if best is None:
+            # «Управляющий» разбирается как причастие, а склонять его надо
+            best = pick(lambda p: p.tag.POS in ("NOUN", "ADJF", "PRTF"))
+        if best is None:
+            return word
+
+        changed = best.inflect({"datv"})
+        if changed is None:
+            return word
+        result = changed.word
+        return result.capitalize() if word[:1].isupper() else result
+    except Exception:
+        return word
+
+
+def phrase_to_dative(text: str) -> str:
+    """Должность целиком: «Генеральный директор» -> «Генеральному директору».
+
+    Склоняем только главную часть: в «Руководитель проекта» и
+    «Заместитель генерального директора» всё после первого
+    существительного стоит в родительном и меняться не должно.
+    """
+    analyzer = _get_analyzer()
+    if not text or analyzer is None:
+        return text
+
+    parts = re.split(r"(\s+)", text)
+    result = []
+    done = False
+    for part in parts:
+        if part.isspace() or done:
+            result.append(part)
+            continue
+        try:
+            pos = analyzer.parse(part)[0].tag.POS
+        except Exception:
+            pos = None
+        result.append(to_dative(part))
+        if pos in ("NOUN", "PRTF"):
+            done = True        # дальше идёт пояснение в родительном
+    return "".join(result)
