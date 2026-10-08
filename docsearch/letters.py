@@ -396,6 +396,33 @@ def _all_text(document) -> str:
     return chr(10).join(parts)
 
 
+def drop_empty_numbering(document) -> int:
+    """Снять нумерацию с пустых абзацев готового письма.
+
+    В бланке, сделанном из письма с нумерованным списком, разметка
+    остаётся в пустых абзацах, и Word рисует «1.» и «2.» на пустом месте.
+    Чистим при сборке, а не только при создании шаблона: иначе старые
+    бланки продолжают портить письма.
+    """
+    from docx.oxml.ns import qn
+
+    removed = 0
+    for paragraph in document.paragraphs:
+        if paragraph.text.strip():
+            continue
+        pPr = paragraph._element.find(qn("w:pPr"))
+        if pPr is not None:
+            numPr = pPr.find(qn("w:numPr"))
+            if numPr is not None:
+                pPr.remove(numPr)
+                removed += 1
+        style = (paragraph.style.name or "").lower()
+        if "list" in style or "список" in style:
+            paragraph.style = document.styles["Normal"]
+            removed += 1
+    return removed
+
+
 def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes:
     """Заполнить бланк организации. Вёрстка, логотип и поля берутся из него."""
     import docx
@@ -439,6 +466,7 @@ def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes
                     walk(cell)
 
     walk(document)
+    drop_empty_numbering(document)
 
     buffer = io.BytesIO()
     document.save(buffer)

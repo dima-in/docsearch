@@ -121,3 +121,22 @@ def test_person_key_keeps_different_people_apart():
 
     assert letters.person_key("Иванову И.И.") != letters.person_key("Иваненко И.И.")
     assert letters.person_key("Лосеву С.В.") != letters.person_key("Лосеву А.В.")
+
+
+def test_spelled_out_legal_form():
+    """«Общество с ограниченной ответственностью «ЕРЛУК»» — это ООО «ЕРЛУК»."""
+    assert meta.find_organizations(
+        "Общество с ограниченной ответственностью " + chr(171) + "ЕРЛУК" + chr(187)
+        + " выполняет работы") == ["ООО " + chr(171) + "ЕРЛУК" + chr(187)]
+    assert meta.find_organizations(
+        "Государственное унитарное предприятие " + chr(171) + "Мосводосток" + chr(187)
+    ) == ["ГУП " + chr(171) + "Мосводосток" + chr(187)]
+
+
+def test_spelled_and_short_forms_are_one_organization():
+    from docsearch import letters
+
+    long_form = meta.find_organizations(
+        "Общество с ограниченной ответственностью " + chr(171) + "ЕРЛУК" + chr(187))[0]
+    short_form = meta.find_organizations("ООО " + chr(171) + "ЕРЛУК" + chr(187))[0]
+    assert letters.org_key(long_form) == letters.org_key(short_form)

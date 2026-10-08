@@ -770,3 +770,30 @@ def test_different_positions_stay_separate():
          "letters": 5, "last_date": None},
     ]
     assert len(letters.merge_nameless(rows)) == 2
+
+
+def test_stray_numbering_cleaned_at_render(tmp_path: Path):
+    """Старый бланк со списком не должен рисовать «1.» в новом письме."""
+    import docx
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    path = tmp_path / "бланк.docx"
+    document = docx.Document()
+    document.add_paragraph("{{body}}")
+    stray = document.add_paragraph("")
+    stray._element.get_or_add_pPr().append(OxmlElement("w:numPr"))
+    document.add_paragraph("", style="List Number")
+    document.save(str(path))
+
+    head = letters.Letterhead.from_config({**HEAD, "template": str(path)})
+    blob = letters.render({"recipient_org": "ООО «Х»", "body": "Текст."}, head)
+
+    result = docx.Document(BytesIO(blob))
+    for paragraph in result.paragraphs:
+        if paragraph.text.strip():
+            continue
+        pPr = paragraph._element.find(qn("w:pPr"))
+        if pPr is not None:
+            assert pPr.find(qn("w:numPr")) is None
+        assert "List" not in (paragraph.style.name or "")

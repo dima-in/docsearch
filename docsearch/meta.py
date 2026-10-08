@@ -180,12 +180,36 @@ def normalize_org(form: str, name: str) -> str | None:
     return apply_alias(f"{form.upper()} «{name}»")
 
 
+# Форму собственности пишут и словами: «Общество с ограниченной
+# ответственностью «ЕРЛУК»». Для разбора это та же ООО
+LONG_FORMS = [
+    (r"общество\s+с\s+ограниченной\s+ответственностью", "ООО"),
+    (r"публичное\s+акционерное\s+общество", "ПАО"),
+    (r"закрытое\s+акционерное\s+общество", "ЗАО"),
+    (r"открытое\s+акционерное\s+общество", "ОАО"),
+    (r"акционерное\s+общество", "АО"),
+    (r"индивидуальный\s+предприниматель", "ИП"),
+    (r"государственное\s+унитарное\s+предприятие", "ГУП"),
+    (r"муниципальное\s+унитарное\s+предприятие", "МУП"),
+    (r"автономная\s+некоммерческая\s+организация", "АНО"),
+]
+RE_LONG_FORMS = [(re.compile(pattern, re.IGNORECASE), short)
+                 for pattern, short in LONG_FORMS]
+
+
+def shorten_forms(text: str) -> str:
+    for pattern, short in RE_LONG_FORMS:
+        text = pattern.sub(short, text)
+    return text
+
+
 def find_organizations(text: str, limit: int = 6) -> list[str]:
     """Организации, упомянутые в шапке документа, в порядке появления.
 
     Первой обычно идёт та, чей это бланк, дальше — адресат. Дубликаты
     убираем, сохраняя порядок.
     """
+    text = shorten_forms(text or "")
     found: list[str] = []
     for match in RE_ORG_QUOTED.finditer(text):
         org = normalize_org(match.group(1), match.group(2))
