@@ -104,6 +104,19 @@
   .card-form textarea:focus,
   .card-form input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
   .card-form .row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+  .combo-wrap { position: relative; display: block; }
+  .combo {
+    display: none; position: absolute; z-index: 5; left: 0; right: 0; top: 100%;
+    margin: 2px 0 0; padding: 4px; list-style: none; max-height: 260px;
+    overflow-y: auto; background: #fff; border: 1px solid var(--line);
+    border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.12);
+  }
+  .combo li { padding: 6px 9px; border-radius: 5px; cursor: pointer;
+              display: flex; gap: 8px; align-items: baseline; }
+  .combo li:hover, .combo li.on { background: var(--accent-soft); }
+  .combo li b { font-weight: 600; }
+  .combo li span { color: var(--muted); font-size: 13px; }
+  .combo li i { margin-left: auto; color: var(--muted); font-size: 12px; font-style: normal; }
   .hint-inline { color: var(--muted); font-size: 12px; margin-left: 10px; }
   .card-form .hint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
   .edited { background: #eaf7ec; color: #1c6b2c; border-radius: 4px; padding: 1px 7px; font-size: 12px; }
@@ -152,11 +165,19 @@
     <span><input id="l-number"><span id="l-number-hint" class="hint-inline"></span></span>
     <label for="l-date">Дата</label><input id="l-date" type="date">
     <label for="l-reference">На №</label><input id="l-reference" placeholder="ссылка на входящее, если есть">
-    <label for="l-recipient-position">Кому, должность</label><input id="l-recipient-position" placeholder="Генеральному директору">
-    <label for="l-recipient-org">Организация</label><input id="l-recipient-org" list="recipients" placeholder="начните печатать — подставится из прошлых писем">
-    <label for="l-recipient-person">Фамилия и инициалы</label><input id="l-recipient-person" placeholder="Белякову А. В.">
+    <label for="l-recipient">Кому</label>
+    <span class="combo-wrap">
+      <input id="l-recipient" autocomplete="off"
+             placeholder="фамилия, имя или организация — начните печатать">
+      <ul id="combo" class="combo"></ul>
+    </span>
+    <label for="l-recipient-position">Должность</label><input id="l-recipient-position" placeholder="Генеральному директору">
+    <label for="l-recipient-org">Организация</label><input id="l-recipient-org">
+    <label for="l-recipient-person">Фамилия и инициалы</label><input id="l-recipient-person" placeholder="Вороновой М. А.">
+    <label for="l-contract">Договор</label><input id="l-contract" placeholder="№ЛС-СМР-Тайн от 18.05.2023">
     <label for="l-subject">Тема</label><input id="l-subject">
     <label for="l-greeting">Обращение</label><input id="l-greeting" placeholder="Уважаемый Александр Вадимович!">
+    <label for="l-intro">Преамбула</label><textarea id="l-intro" rows="3" placeholder="подставится по организации и договору"></textarea>
     <label for="l-body">Текст</label><textarea id="l-body" rows="8"></textarea>
     <label for="l-signer-position">Подписант</label><input id="l-signer-position">
     <label for="l-signer-name">ФИО подписанта</label><input id="l-signer-name">
@@ -167,7 +188,6 @@
     <div class="hint">Файл скачивается — в архив ничего не пишется. Правьте в
       Word, сохраняйте в нужную папку, обход подхватит его сам.</div>
   </div>
-  <datalist id="recipients"></datalist>
 </dialog>
 
 <dialog id="viewer">
@@ -475,8 +495,12 @@ async function showRecent() {
 
 let knownRecipients = [];
 
+let introTemplate = "";
+let ownOrg = "";
+
 const LETTER_FIELDS = ["number", "date", "recipient_position", "recipient_org",
-  "recipient_person", "subject", "reference", "greeting", "body",
+  "recipient_person", "subject", "reference", "greeting", "intro", "body",
+  "contract",
   "signer_position", "signer_name"];
 
 async function openLetter() {
@@ -491,10 +515,13 @@ async function openLetter() {
     (draft.letterhead || []).join("\n") || "Бланк не заполнен в конфиге";
   // справочник адресатов: выбрал организацию — должность и фамилия сами
   knownRecipients = draft.recipients || [];
-  document.getElementById("recipients").innerHTML = knownRecipients
-    .map(r => `<option value="${escapeHtml(r.org)}">` +
-              `${escapeHtml([r.position, r.person].filter(Boolean).join(", "))}</option>`)
-    .join("");
+  introTemplate = draft.intro_template || "";
+  ownOrg = draft.own_org || "";
+  for (const id of ["l-recipient", "l-recipient-org", "l-recipient-person",
+                    "l-recipient-position", "l-contract", "l-intro"]) {
+    document.getElementById(id).value = "";
+  }
+  document.getElementById("l-intro").dataset.touched = "";
   document.getElementById("letter-status").textContent = "";
   document.getElementById("letter").showModal();
 }
@@ -550,16 +577,120 @@ async function buildLetter() {
   status.innerHTML = '<span class="edited">Готово, файл скачан</span>';
 }
 
-// подставляем должность и фамилию, но не затираем уже введённое руками
-document.getElementById("l-recipient-org").addEventListener("change", () => {
-  const chosen = knownRecipients.find(
-    r => r.org === document.getElementById("l-recipient-org").value);
-  if (!chosen) return;
-  const position = document.getElementById("l-recipient-position");
-  const person = document.getElementById("l-recipient-person");
-  if (!position.value && chosen.position) position.value = chosen.position;
-  if (!person.value && chosen.person) person.value = chosen.person;
+// --------------------------------------------- подбор адресата по любому слову
+
+let comboIndex = -1;
+
+// Падежи: в письме фамилия стоит «Вороновой», ищут её как «Воронова».
+// Сравниваем в обе стороны — короткое должно быть началом длинного.
+function tokenMatches(typed, candidate) {
+  if (typed.length < 2) return candidate.startsWith(typed);
+  return candidate.startsWith(typed) ||
+         (typed.length >= 3 && typed.startsWith(candidate) && candidate.length >= 3);
+}
+
+function matchesQuery(contact, query) {
+  const tokens = query.toLowerCase().split(/[^0-9a-zа-яё]+/i).filter(Boolean);
+  if (!tokens.length) return true;
+  const keyTokens = (contact.search_key || "").split(/\s+/).filter(Boolean);
+  return tokens.every(token => keyTokens.some(key => tokenMatches(token, key)));
+}
+
+function contactLabel(contact) {
+  const who = [contact.person, contact.position].filter(Boolean).join(", ");
+  return { org: contact.org, who };
+}
+
+function showCombo(matches) {
+  const box = document.getElementById("combo");
+  if (!matches.length) {
+    box.style.display = "none";
+    return;
+  }
+  box.innerHTML = matches.map((contact, i) => {
+    const { org, who } = contactLabel(contact);
+    return `<li data-i="${i}" class="${i === comboIndex ? "on" : ""}">
+      <b>${escapeHtml(org)}</b>${who ? "<span>" + escapeHtml(who) + "</span>" : ""}
+      ${contact.letters ? `<i>${contact.letters}</i>` : ""}
+    </li>`;
+  }).join("");
+  box.style.display = "block";
+  box.querySelectorAll("li").forEach(item => {
+    item.onmousedown = event => {
+      event.preventDefault();          // не терять фокус раньше выбора
+      pickContact(matches[Number(item.dataset.i)]);
+    };
+  });
+}
+
+function hideCombo() {
+  document.getElementById("combo").style.display = "none";
+  comboIndex = -1;
+}
+
+function currentMatches() {
+  const query = document.getElementById("l-recipient").value.trim();
+  return knownRecipients.filter(contact => matchesQuery(contact, query)).slice(0, 12);
+}
+
+function pickContact(contact) {
+  document.getElementById("l-recipient").value =
+    [contact.person, contact.org].filter(Boolean).join(", ");
+  document.getElementById("l-recipient-org").value = contact.org || "";
+  document.getElementById("l-recipient-position").value = contact.position || "";
+  document.getElementById("l-recipient-person").value = contact.person || "";
+  if (contact.contract && !document.getElementById("l-contract").value) {
+    document.getElementById("l-contract").value = contact.contract;
+  }
+  hideCombo();
+  updateIntro();
+}
+
+function setupCombo() {
+  const input = document.getElementById("l-recipient");
+  input.addEventListener("input", () => {
+    comboIndex = -1;
+    showCombo(currentMatches());
+  });
+  input.addEventListener("focus", () => showCombo(currentMatches()));
+  input.addEventListener("blur", () => setTimeout(hideCombo, 150));
+  input.addEventListener("keydown", event => {
+    const matches = currentMatches();
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      comboIndex = (comboIndex + step + matches.length) % matches.length;
+      showCombo(matches);
+    } else if (event.key === "Enter" && comboIndex >= 0) {
+      event.preventDefault();
+      pickContact(matches[comboIndex]);
+    } else if (event.key === "Escape") {
+      hideCombo();
+    }
+  });
+}
+
+// Первый абзац письма одинаков всегда — меняются только организация и
+// договор. Собираем его из шаблона, но оставляем правимым.
+function updateIntro() {
+  const field = document.getElementById("l-intro");
+  if (field.dataset.touched === "1") return;
+  const org = document.getElementById("l-recipient-org").value;
+  const contract = document.getElementById("l-contract").value;
+  if (!introTemplate || !org) return;
+  field.value = introTemplate
+    .replace(/{{\s*recipient_org\s*}}/g, org)
+    .replace(/{{\s*own_org\s*}}/g, ownOrg)
+    .replace(/{{\s*contract\s*}}/g, contract || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+document.getElementById("l-intro").addEventListener("input", event => {
+  event.target.dataset.touched = "1";   // правил руками — не перезатираем
 });
+document.getElementById("l-contract").addEventListener("input", updateIntro);
+setupCombo();
 
 document.getElementById("new-letter").onclick = openLetter;
 document.getElementById("letter-build").onclick = buildLetter;

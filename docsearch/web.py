@@ -206,6 +206,8 @@ def create_app(cfg: Config) -> FastAPI:
                 "signer_position": head.signer_position,
                 "signer_name": head.signer_name,
                 "letterhead": head.header_lines(),
+                "intro_template": head.intro,
+                "own_org": cfg.own_org or head.name,
             })
         finally:
             conn.close()

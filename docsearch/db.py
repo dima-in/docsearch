@@ -62,11 +62,14 @@ CREATE TABLE IF NOT EXISTS overrides (
 -- Справочник адресатов, собранный из прошлых писем: кому и как мы уже
 -- писали. Заводить его руками никто не станет, а в переписке он есть.
 CREATE TABLE IF NOT EXISTS contacts (
-    org       TEXT PRIMARY KEY,
+    org       TEXT NOT NULL,
+    person    TEXT NOT NULL DEFAULT '',
     position  TEXT,
-    person    TEXT,
+    contract  TEXT,
     letters   INTEGER NOT NULL DEFAULT 0,
-    last_date TEXT
+    last_date TEXT,
+    search_key TEXT,
+    PRIMARY KEY (org, person)
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -120,6 +123,13 @@ def migrate(conn: sqlite3.Connection) -> list[str]:
     added = _add_missing(conn, "documents", OPTIONAL_COLUMNS)
     # у ручных правок свой набор полей, и он тоже растёт
     added += _add_missing(conn, "overrides", {"section": "TEXT"})
+    # справочник адресатов — производные данные: при смене формы его
+    # проще выбросить и собрать заново, чем мигрировать
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(contacts)")}
+    if columns and not {"person", "contract", "search_key"} <= columns:
+        conn.execute("DROP TABLE contacts")
+        conn.executescript(SCHEMA_TABLES)
+        added.append("contacts (пересоздан)")
     if added:
         conn.commit()
     return added
@@ -551,22 +561,26 @@ def recent(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
 def save_contacts(conn: sqlite3.Connection, rows: list[dict]) -> int:
     conn.execute("DELETE FROM contacts")
     conn.executemany(
-        "INSERT INTO contacts (org, position, person, letters, last_date)"
-        " VALUES (?,?,?,?,?)",
-        [(r["org"], r.get("position"), r.get("person"), r.get("letters", 0),
-          r.get("last_date")) for r in rows],
+        "INSERT OR REPLACE INTO contacts"
+        " (org, person, position, contract, letters, last_date, search_key)"
+        " VALUES (?,?,?,?,?,?,?)",
+        [(r["org"], r.get("person") or "", r.get("position"),
+          r.get("contract"), r.get("letters", 0), r.get("last_date"),
+          r.get("search_key")) for r in rows],
     )
     conn.commit()
     return len(rows)
 
 
-def contacts(conn: sqlite3.Connection, limit: int = 300) -> list[dict]:
-    """Адресаты по алфавиту: в длинном списке ищут конкретного."""
+def contacts(conn: sqlite3.Connection, limit: int = 500) -> list[dict]:
+    """Адресаты: сначала те, кому писали чаще, внутри организации — тоже."""
     return [
         dict(r)
         for r in conn.execute(
-            "SELECT org, position, person, letters, last_date FROM contacts"
-            " ORDER BY ru_lower(substr(org, instr(org, '«') + 1)) LIMIT ?",
+            "SELECT org, person, position, contract, letters, last_date,"
+            " search_key FROM contacts"
+            " ORDER BY letters DESC,"
+            " ru_lower(substr(org, instr(org, '«') + 1)) LIMIT ?",
             (limit,),
         )
     ]

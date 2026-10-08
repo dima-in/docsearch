@@ -356,3 +356,76 @@ def test_template_path_is_relative_to_config(tmp_path: Path):
         encoding="utf-8")
     cfg = config_mod.load(cfg_file)
     assert Path(cfg.letterhead["template"]).exists()
+
+
+def test_contract_is_mined_from_the_letter():
+    """Основание в первом абзаце повторяется из письма в письмо."""
+    text = ("Между ООО «Мосренстрой-6» и ООО «ФБ-Строй» заключен договор "
+            "подряда №ЛС-СМР-Тайн от 18.05.2023 на выполнение работ")
+    assert letters.find_contract(text) == "№ЛС-СМР-Тайн от 18.05.2023"
+    assert letters.find_contract("договор поставки № 44/25 от 01.02.2025") \
+        == "№44/25 от 01.02.2025"
+    assert letters.find_contract("просто текст") is None
+
+
+def test_search_key_holds_both_cases():
+    """В письме «Вороновой», ищут «Воронова» — ключ должен покрыть оба."""
+    key = letters.search_key("ООО «СК АВАНГАРД»", "Вороновой М.А.",
+                             "Генеральному директору")
+    assert "авангард" in key
+    assert "вороновой" in key
+    assert "воронов" in key          # начальная форма
+
+
+def test_several_addressees_per_organization(env):
+    conn, cfg = env
+    conn.execute("UPDATE documents SET section = 'переписка'")
+    rows = [
+        {"org": "ООО «СК АВАНГАРД»", "person": "Вороновой М.А.",
+         "position": "Генеральному директору", "letters": 7,
+         "search_key": letters.search_key("ООО «СК АВАНГАРД»", "Вороновой М.А.")},
+        {"org": "ООО «СК АВАНГАРД»", "person": "Петрову И.И.",
+         "position": "Главному инженеру", "letters": 2,
+         "search_key": letters.search_key("ООО «СК АВАНГАРД»", "Петрову И.И.")},
+    ]
+    db.save_contacts(conn, rows)
+    saved = db.contacts(conn)
+    assert len(saved) == 2
+    assert saved[0]["person"] == "Вороновой М.А."      # чаще писали — выше
+
+
+def test_intro_becomes_first_paragraph_without_slot(tmp_path: Path):
+    """Если в бланке нет места под преамбулу, она идёт первым абзацем."""
+    template = make_template(tmp_path / "бланк.docx")
+    head = letters.Letterhead.from_config({**HEAD, "template": str(template)})
+    lines = read_all(letters.render({
+        "recipient_org": "ООО «Х»",
+        "intro": "Между ООО «Х» и ООО «ФБ-СТРОЙ» заключен договор.",
+        "body": "Просим ответить.",
+    }, head))
+    assert "Между ООО «Х» и ООО «ФБ-СТРОЙ» заключен договор." in lines
+    assert "Просим ответить." in lines
+    assert lines.index("Между ООО «Х» и ООО «ФБ-СТРОЙ» заключен договор.") \
+        < lines.index("Просим ответить.")
+
+
+def test_intro_uses_its_own_slot_when_present(tmp_path: Path):
+    import docx
+
+    path = tmp_path / "бланк.docx"
+    document = docx.Document()
+    document.add_paragraph("{{intro}}")
+    document.add_paragraph("{{body}}")
+    document.save(str(path))
+
+    head = letters.Letterhead.from_config({**HEAD, "template": str(path)})
+    lines = read_all(letters.render({
+        "intro": "Основание письма.", "body": "Суть.",
+    }, head))
+    assert lines == ["Основание письма.", "Суть."]
+
+
+def test_default_intro_has_the_usual_wording():
+    head = letters.Letterhead.from_config({})
+    assert "{{recipient_org}}" in head.intro
+    assert "заключен договор" in head.intro

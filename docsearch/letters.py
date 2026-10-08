@@ -27,6 +27,12 @@ MONTHS_GENITIVE = [
 ]
 
 
+# Первый абзац в письмах повторяется слово в слово, меняются только
+# организация и договор. Держим его шаблоном, а не копипастой.
+DEFAULT_INTRO = ("Между {{recipient_org}} и {{own_org}} заключен договор "
+                 "подряда {{contract}}.")
+
+
 @dataclass
 class Letterhead:
     """Бланк организации. Берётся из конфига целиком."""
@@ -43,6 +49,7 @@ class Letterhead:
     signer_name: str = ""
     number_prefix: str = ""
     template: str = ""
+    intro: str = DEFAULT_INTRO
     extra_lines: list = field(default_factory=list)
 
     @classmethod
@@ -62,6 +69,7 @@ class Letterhead:
             signer_name=raw.get("signer_name", ""),
             number_prefix=raw.get("number_prefix", ""),
             template=raw.get("template", ""),
+            intro=raw.get("intro", DEFAULT_INTRO),
             extra_lines=list(raw.get("extra_lines", [])),
         )
 
@@ -336,6 +344,15 @@ def _expand_body(paragraph, body: str) -> None:
         _set_text(Paragraph(clone, paragraph._parent), line)
 
 
+def _all_text(document) -> str:
+    parts = [p.text for p in document.paragraphs]
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                parts += [p.text for p in cell.paragraphs]
+    return chr(10).join(parts)
+
+
 def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes:
     """Заполнить бланк организации. Вёрстка, логотип и поля берутся из него."""
     import docx
@@ -351,6 +368,12 @@ def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes
         context[key] = context.get(key) or getattr(head, key)
 
     body_text = context.pop("body", "")
+    intro = (context.get("intro") or "").strip()
+    has_intro_slot = "{{intro}}" in _all_text(document)
+    if intro and not has_intro_slot:
+        # в бланке нет отдельного места под преамбулу — ставим её первым
+        # абзацем текста, как в письмах и написано
+        body_text = intro + (chr(10) + body_text if body_text else "")
 
     def walk(parent):
         for paragraph in parent.paragraphs:
@@ -434,34 +457,70 @@ def parse_addressee(text: str) -> dict | None:
 HEAD_LIMIT = 1500
 
 
+# «заключен договор подряда №ЛС-СМР-Тайн от 18.05.2023» — основание,
+# которое в письмах этой организации повторяется из раза в раз
+RE_CONTRACT = re.compile(
+    r"договор\w*\s+(?:подряда|субподряда|поставки|оказания[^№]{0,40})?\s*"
+    r"№\s*([^\s,;]{1,40})\s*от\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})",
+    re.IGNORECASE,
+)
+
+
+def find_contract(text: str) -> str | None:
+    match = RE_CONTRACT.search(text or "")
+    if not match:
+        return None
+    return f"№{match.group(1)} от {match.group(2)}"
+
+
+def search_key(*parts: str) -> str:
+    """Строка для поиска по справочнику.
+
+    Кроме самих слов кладём их начальные формы: в письме фамилия стоит в
+    дательном падеже («Вороновой»), а ищут её в именительном.
+    """
+    from . import morph
+
+    text = " ".join(part for part in parts if part).lower()
+    lemmas = " ".join(morph.lemma(token) for token in morph.tokenize(text))
+    return f"{text} {lemmas}"
+
+
 def rebuild_contacts(conn, progress=None) -> list[dict]:
     """Собрать справочник адресатов, пройдя по переписке.
 
-    Побеждает самое свежее письмо: должности меняются, и писать надо
-    тому, кто занимает её сейчас.
+    У организации бывает несколько адресатов, поэтому ключ — пара
+    «организация + человек». Побеждает самое свежее письмо: должности
+    меняются, и писать надо тому, кто занимает её сейчас.
     """
-    found: dict[str, dict] = {}
+    found: dict[tuple, dict] = {}
     seen = 0
     for row in db.correspondence_bodies(conn):
         seen += 1
         if progress and seen % 500 == 0:
             progress(seen, len(found))
-        parsed = parse_addressee(row["body"] or "")
+        body = row["body"] or ""
+        parsed = parse_addressee(body)
         if not parsed:
             continue
-        org = parsed["org"]
-        entry = found.setdefault(org, {
-            "org": org, "position": None, "person": None,
+        key = (parsed["org"], parsed["person"] or "")
+        entry = found.setdefault(key, {
+            "org": parsed["org"], "person": parsed["person"] or "",
+            "position": None, "contract": None,
             "letters": 0, "last_date": None,
         })
         entry["letters"] += 1
         # письма идут от свежих к старым, поэтому первое и есть актуальное
         if entry["position"] is None:
             entry["position"] = parsed["position"]
-            entry["person"] = parsed["person"]
             entry["last_date"] = row["doc_date"]
+        if entry["contract"] is None:
+            entry["contract"] = find_contract(body)
 
     rows = sorted(found.values(), key=lambda e: -e["letters"])
+    for entry in rows:
+        entry["search_key"] = search_key(entry["org"], entry["person"],
+                                         entry["position"])
     db.save_contacts(conn, rows)
     return rows
 
@@ -475,5 +534,6 @@ def recipients(conn) -> list[dict]:
     if known:
         return known
     # переписки ещё нет — предложим хотя бы контрагентов из архива
-    return [{"org": org, "position": None, "person": None, "letters": 0}
+    return [{"org": org, "person": "", "position": None, "contract": None,
+             "letters": 0, "search_key": search_key(org)}
             for org in known_recipients(conn)]

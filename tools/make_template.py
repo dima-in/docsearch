@@ -24,6 +24,7 @@ PLACEHOLDERS = {
     "recipient_person": "фамилия адресата",
     "subject": "тема",
     "greeting": "обращение",
+    "intro": "первый абзац — основание, договор",
     "body": "текст письма",
     "signer_position": "должность подписанта",
     "signer_name": "фамилия подписанта",
@@ -93,6 +94,11 @@ def build(source: str, target: str) -> list[str]:
             state = "done"
             report.append("подпись")
         elif state == "body" and text:
+            # первый абзац письма — всегда одно и то же основание
+            set_text(paragraph, "{{intro}}")
+            state = "intro_done"
+            report.append("преамбула (первый абзац)")
+        elif state == "intro_done" and text:
             set_text(paragraph, "{{body}}")
             state = "body_done"
             report.append("текст письма")
