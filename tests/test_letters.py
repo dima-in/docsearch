@@ -714,3 +714,59 @@ def test_contract_shared_across_spellings(env):
     rows = letters.rebuild_contacts(conn)
     assert len(rows) == 1
     assert rows[0]["contract"] == "№СКА-5 от 10.01.2025"
+
+
+def test_contract_goes_to_the_party_not_the_addressee():
+    """В преамбуле названы стороны договора, а письмо о нём может уйти
+    и третьему лицу: у ПД-Проекта не наш договор с Мосренстроем."""
+    text = chr(10).join([
+        "Генеральному директору", "ООО «ПД-Проект»", "Демину А.А.",
+        "Между ООО «Мосренстрой-6» и ООО «ФБ-Строй» заключен договор подряда"
+        " №ЛС-СМР-Тайн от 18.05.2023 на выполнение работ",
+    ])
+    party, contract = letters.find_contract_parties(text, "ФБ-Строй")
+    assert party == "ООО «Мосренстрой-6»"
+    assert contract == "№ЛС-СМР-Тайн от 18.05.2023"
+
+
+def test_contract_parties_skip_our_own_side():
+    party, _ = letters.find_contract_parties(
+        "Между ООО «НЛ-ГРУПП» и ООО «ФБ-Строй» заключен договор"
+        " №РЕН-2804 от 28.04.2025", "ФБ-Строй")
+    assert party == "ООО «НЛ-ГРУПП»"
+
+
+def test_nameless_entry_merges_into_named_one():
+    """«Генеральному директору ООО «X»» без фамилии — тот же адресат."""
+    rows = [
+        {"org": "ООО «ПД-Проект»", "person": "", "position": "Генеральному директору",
+         "contract": "№5 от 01.01.2025", "letters": 29, "last_date": None},
+        {"org": "ООО «ПД-ПРОЕКТ»", "person": "Демину А.А.",
+         "position": "Генеральному директору", "contract": None,
+         "letters": 2, "last_date": None},
+    ]
+    merged = letters.merge_nameless(rows)
+    assert len(merged) == 1
+    assert merged[0]["person"] == "Демину А.А."
+    assert merged[0]["letters"] == 31
+    assert merged[0]["contract"] == "№5 от 01.01.2025"
+
+
+def test_nameless_entry_survives_without_a_named_one():
+    """У М-СТРОЙ фамилии нет нигде — строка должна остаться."""
+    rows = [{"org": "ООО «М-СТРОЙ»", "person": "",
+             "position": "Генеральному директору", "contract": None,
+             "letters": 9, "last_date": None}]
+    assert len(letters.merge_nameless(rows)) == 1
+
+
+def test_different_positions_stay_separate():
+    rows = [
+        {"org": "ООО «Мосренстрой-6»", "person": "Горбуновой М.Н.",
+         "position": "Заместителю генерального", "contract": None,
+         "letters": 90, "last_date": None},
+        {"org": "ООО «Мосренстрой-6»", "person": "",
+         "position": "Генеральному директору", "contract": None,
+         "letters": 5, "last_date": None},
+    ]
+    assert len(letters.merge_nameless(rows)) == 2

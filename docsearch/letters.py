@@ -521,6 +521,38 @@ RE_CONTRACT = re.compile(
 )
 
 
+# «Между ООО «X» и ООО «ФБ-Строй» заключен договор подряда №N от DD.MM.YYYY»
+# Стороны договора названы прямо, и привязывать основание надо к ним, а не
+# к адресату: письмо о том же договоре могло уйти и третьему лицу
+RE_CONTRACT_PARTIES = re.compile(
+    r"Между\s+(.{0,120}?)\s+и\s+(.{0,120}?)\s+заключ\w+\s+"
+    r"(?:договор|контракт)\w*(?:[^№]{0,60})?"
+    r"№\s*([^\s,;]{1,40})\s*от\s*(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def find_contract_parties(text: str, own_org: str | None = None):
+    """Стороны договора и его реквизиты из первого абзаца письма.
+
+    Возвращает (организация, договор). Организация — та из двух сторон,
+    которая не мы: договор у нас с ней, и в справочнике он нужен ей.
+    """
+    match = RE_CONTRACT_PARTIES.search(text or "")
+    if not match:
+        return None, None
+    contract = f"№{match.group(3)} от {match.group(4)}"
+
+    from . import meta
+
+    own = org_key(own_org or "")
+    candidates = []
+    for side in (match.group(1), match.group(2)):
+        candidates += meta.find_organizations(side)
+    others = [org for org in candidates if not own or org_key(org) != own]
+    return (others[0] if others else None), contract
+
+
 def find_contract(text: str) -> str | None:
     match = RE_CONTRACT.search(text or "")
     if not match:
@@ -589,6 +621,42 @@ def person_key(person: str) -> str:
     return f"{base}{initials}"
 
 
+def position_key(position: str) -> str:
+    return re.sub(r"[^0-9a-zа-яё]+", "", (position or "").lower())
+
+
+def merge_nameless(rows: list[dict]) -> list[dict]:
+    """Свести записи без фамилии в именную с той же должностью.
+
+    Часть писем адресована просто «Генеральному директору ООО «X»», без
+    человека. Это тот же адресат, и отдельной строкой в справочнике он
+    только мешает. Запись остаётся самостоятельной, если именной с такой
+    же должностью у организации нет.
+    """
+    named: dict[tuple, dict] = {}
+    for row in rows:
+        if row["person"]:
+            key = (org_key(row["org"]), position_key(row["position"]))
+            best = named.get(key)
+            if best is None or row["letters"] > best["letters"]:
+                named[key] = row
+
+    result = []
+    for row in rows:
+        if row["person"]:
+            result.append(row)
+            continue
+        target = named.get((org_key(row["org"]), position_key(row["position"])))
+        if target is None:
+            result.append(row)
+            continue
+        target["letters"] += row["letters"]
+        if not target["contract"]:
+            target["contract"] = row["contract"]
+    result.sort(key=lambda e: -e["letters"])
+    return result
+
+
 def _most_common(values: list[str]) -> str | None:
     """Самое частое написание — его и показываем."""
     from collections import Counter
@@ -616,11 +684,11 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
             progress(seen, len(found))
         body = row["body"] or ""
 
-        contract = find_contract(body)
-        if contract and row["counterparty"]:
-            # основание есть в первом абзаце любого письма, даже если блок
-            # «кому» не разобрался: оформление бланков у всех разное
-            contracts.setdefault(org_key(row["counterparty"]), contract)
+        # договор принадлежит сторонам, названным в преамбуле, а не
+        # обязательно адресату письма
+        party, contract = find_contract_parties(body, own_org)
+        if party and contract:
+            contracts.setdefault(org_key(party), contract)
 
         parsed = parse_addressee(body)
         if not parsed:
@@ -629,8 +697,6 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
         if own and key_org == own:
             # это входящее: адресат — мы сами, в справочнике ему не место
             continue
-        if contract:
-            contracts.setdefault(key_org, contract)
 
         key = (key_org, person_key(parsed["person"] or ""))
         entry = found.setdefault(key, {
@@ -644,7 +710,7 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
         # письма идут от свежих к старым, первое и есть актуальное
         if entry["last_date"] is None:
             entry["last_date"] = row["doc_date"]
-        if entry["contract"] is None:
+        if entry["contract"] is None and party and org_key(party) == key_org:
             entry["contract"] = contract
 
     rows = []
@@ -657,7 +723,7 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
             "letters": entry["letters"],
             "last_date": entry["last_date"],
         })
-    rows.sort(key=lambda e: -e["letters"])
+    rows = merge_nameless(rows)
     for entry in rows:
         entry["search_key"] = search_key(entry["org"], entry["person"],
                                          entry["position"])
