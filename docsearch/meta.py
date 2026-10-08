@@ -82,6 +82,11 @@ RE_NUM_LABELLED = re.compile(
     re.IGNORECASE,
 )
 RE_NUM_PLAIN = re.compile(r"(?:№|N[oº])\s*(" + PREFIXED + r"|" + PLAIN + r")")
+
+# Имя файла часто начинается прямо с номера: «РТП-1336 МРС6.pdf». Такое
+# правило безопасно только с якорем на начало строки — иначе шифр
+# «208-1121-ОК-1-АР4» тоже сойдёт за номер письма
+RE_NUM_AT_START = re.compile(r"^\s*(" + PREFIXED + r")")
 RE_DATE_NUM = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})\b")
 RE_DATE_WORD = re.compile(
     r"\b(\d{1,2})\s+(" + "|".join(MONTHS) + r")\s+(\d{4})", re.IGNORECASE
@@ -271,9 +276,13 @@ def find_date(text: str) -> str | None:
     return None
 
 
-def find_number(text: str) -> str | None:
+def find_number(text: str, from_start: bool = False) -> str | None:
+    """Номер документа. from_start — для имени файла: оно нередко
+    начинается прямо с номера, без слова «Исх»."""
     m = (RE_NUM_PREFIXED.search(text) or RE_NUM_LABELLED.search(text)
          or RE_NUM_PLAIN.search(text))
+    if not m and from_start:
+        m = RE_NUM_AT_START.match(text)
     return m.group(1).rstrip(".,;") if m else None
 
 
@@ -338,7 +347,8 @@ def guess(path: Path, rel_path: str, text: str,
         "section": sections.guess_for(path, rel_path, doc_type, section_rules),
         # тип ищем сначала в имени файла — оно обычно честнее шапки
         "doc_type": doc_type,
-        "doc_number": find_number(name) or find_number(head),
+        "doc_number": find_number(name, from_start=True)
+        or find_number(head),
         "doc_date": find_date(name) or find_date(head),
         "object_code": find_object_code(head) or find_object_code(folders),
         # организация из шапки документа надёжнее имени папки: папки в

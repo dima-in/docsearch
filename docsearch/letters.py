@@ -125,28 +125,41 @@ MAX_GAP = 100
 MIN_SAMPLE = 5
 
 
+def bs_word() -> str:
+    """Граница слова для регулярного выражения."""
+    return chr(92) + "b"
+
+
 def numbers_for(conn: sqlite3.Connection, prefix: str,
                 folder: str = "") -> list[int]:
     """Все номера с этим префиксом, по возрастанию.
 
-    Если указана папка исходящих, считаем только по ней: номера живут
-    там, а по всему архиву в выборку попадает посторонняя нумерация.
+    Смотрим и на разобранный номер, и на имя файла: половина писем
+    названа «РТП-1336 МРС6.pdf» — без слова «Исх.», — и по одному только
+    разобранному полю такие не видны. Поиск по имени безопасен, потому
+    что префикс задан явно в конфиге.
     """
-    wanted = prefix.strip().lower()
-    sql = ("SELECT doc_number FROM documents"
-           " WHERE doc_number IS NOT NULL AND doc_number != ''")
+    wanted = prefix.strip()
+    sql = "SELECT doc_number, name FROM documents"
     params: list = []
     if folder:
-        sql += " AND ru_lower(rel_path) LIKE ?"
+        sql += " WHERE ru_lower(rel_path) LIKE ?"
         params.append(f"%{folder.lower()}%")
+
+    by_prefix = re.compile(
+        bs_word() + re.escape(wanted) + r"[-\s]?(\d{1,6})" + bs_word(),
+        re.IGNORECASE,
+    ) if wanted else None
+
     found = []
     for row in conn.execute(sql, params):
-        parsed = parse_number(row["doc_number"])
-        if not parsed:
+        if by_prefix:
+            for source in (row["doc_number"], row["name"]):
+                found += [int(d) for d in by_prefix.findall(source or "")]
             continue
-        found_prefix, number = parsed
-        if found_prefix.lower() == wanted:
-            found.append(number)
+        parsed = parse_number(row["doc_number"] or "")
+        if parsed and not parsed[0]:
+            found.append(parsed[1])
     return sorted(found)
 
 

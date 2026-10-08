@@ -518,3 +518,52 @@ def test_numbering_is_limited_to_the_letters_folder(tmp_path: Path):
         assert letters.next_number(conn, "РТП", "Переписка") == "РТП-176"
     finally:
         conn.close()
+
+
+REAL_NAMES = [
+    "Исх. РТП-1337 МРС (ответ УКМ-299).pdf",
+    "Исх. РТП-1337 ПКС Инжиниринг.doc",     # то же письмо, исходник и скан
+    "РТП-1336 МРС6.pdf",                    # без слова «Исх.»
+    "Исх. РТП-1334  общее запрос акта сверки.pdf",
+    "РТП-1331.pdf",
+    "Приложение РТП-1327.pdf",
+    "РТП-1317 КлассСтрой.docx",
+]
+
+
+def test_numbering_reads_real_file_names(tmp_path: Path):
+    """Половина писем названа без «Исх.»: по одному разобранному полю
+    такие номера не видны, а нумерация должна их учитывать."""
+    box = tmp_path / "arc" / "02 .Переписка (Письма)"
+    box.mkdir(parents=True)
+    for name in REAL_NAMES:
+        (box / name).write_bytes(b"")
+    foreign = tmp_path / "arc" / "Проекты"
+    foreign.mkdir()
+    (foreign / "РТП-99000 посторонний.pdf").write_bytes(b"")
+
+    cfg = Config(roots=[Root(label="ПТО", path=str(tmp_path / "arc"))],
+                 db=str(tmp_path / "index.db"), letterhead=HEAD)
+    conn = db.connect(cfg.db)
+    try:
+        indexer.run(conn, cfg)
+        assert letters.next_number(conn, "РТП", "Переписка") == "РТП-1338"
+        # без ограничения папкой в счёт идёт посторонняя нумерация
+        assert letters.next_number(conn, "РТП") == "РТП-99001"
+    finally:
+        conn.close()
+
+
+def test_number_from_file_name_without_prefix_word():
+    from docsearch import meta
+
+    assert meta.find_number("РТП-1336 МРС6", from_start=True) == "РТП-1336"
+    assert meta.find_number("РТП-1331", from_start=True) == "РТП-1331"
+    assert meta.find_number("Исх. РТП-1337 МРС", from_start=True) == "РТП-1337"
+
+
+def test_object_code_is_not_mistaken_for_a_letter_number():
+    """Шифр альбома начинается с цифр и номером письма быть не может."""
+    from docsearch import meta
+
+    assert meta.find_number("208-1121-ОК-1-АР4", from_start=True) is None
