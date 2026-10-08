@@ -626,3 +626,28 @@ def test_own_organization_printed_in_full(tmp_path: Path):
     conn.close()
     client = TestClient(create_app(cfg))
     assert client.get("/api/letter/draft").json()["own_org"] == "ООО «ФБ-СТРОЙ»"
+
+
+def test_contract_attached_without_parsed_addressee(env):
+    """Оформление бланков разное: основание есть даже там, где блок
+    «кому» не разобрался."""
+    conn, cfg = env
+    doc_id = conn.execute("SELECT MIN(id) id FROM documents").fetchone()["id"]
+    conn.execute(
+        "UPDATE documents SET section='переписка', doc_type='письмо',"
+        " counterparty='ООО «НЛ Групп»' WHERE id=?", (doc_id,))
+    body = chr(10).join([
+        "Генеральному директору",
+        "ООО «НЛ Групп»",
+        "Иванову И.И.",
+        "Между ООО «НЛ Групп» и ООО «ФБ-Строй» заключен договор подряда"
+        " №НЛ-17 от 03.04.2024 на выполнение работ",
+    ])
+    conn.execute("DELETE FROM doc_fts WHERE rowid = ?", (doc_id,))
+    conn.execute("INSERT INTO doc_fts (rowid, name, body, lemmas)"
+                 " VALUES (?,?,?,?)", (doc_id, "письмо", body, body))
+    conn.commit()
+
+    rows = letters.rebuild_contacts(conn)
+    found = {r["org"]: r for r in rows}
+    assert found["ООО «НЛ Групп»"]["contract"] == "№НЛ-17 от 03.04.2024"

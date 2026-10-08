@@ -482,7 +482,10 @@ def parse_addressee(text: str) -> dict | None:
     """
     from . import meta
 
-    lines = [line.strip() for line in (text or "")[:HEAD_LIMIT].split(chr(10))]
+    # блок адресата в бланке лежит в ячейке таблицы, а ячейки строки наш
+    # разбор склеивает через « | » — для поиска это такой же перенос
+    head = (text or "")[:HEAD_LIMIT].replace(" | ", chr(10))
+    lines = [line.strip() for line in head.split(chr(10))]
     lines = [line for line in lines if line]
 
     for i, line in enumerate(lines):
@@ -563,12 +566,19 @@ def rebuild_contacts(conn, progress=None) -> list[dict]:
     меняются, и писать надо тому, кто занимает её сейчас.
     """
     found: dict[tuple, dict] = {}
+    contracts: dict[str, str] = {}
     seen = 0
     for row in db.correspondence_bodies(conn):
         seen += 1
         if progress and seen % 500 == 0:
             progress(seen, len(found))
         body = row["body"] or ""
+        contract = find_contract(body)
+        if contract and row["counterparty"]:
+            # основание есть в первом абзаце любого письма, даже если блок
+            # «кому» не разобрался: оформление бланков у всех разное
+            contracts.setdefault(row["counterparty"], contract)
+
         parsed = parse_addressee(body)
         if not parsed:
             continue
@@ -584,10 +594,12 @@ def rebuild_contacts(conn, progress=None) -> list[dict]:
             entry["position"] = parsed["position"]
             entry["last_date"] = row["doc_date"]
         if entry["contract"] is None:
-            entry["contract"] = find_contract(body)
+            entry["contract"] = contract
 
     rows = sorted(found.values(), key=lambda e: -e["letters"])
     for entry in rows:
+        if not entry["contract"]:
+            entry["contract"] = contracts.get(entry["org"])
         entry["search_key"] = search_key(entry["org"], entry["person"],
                                          entry["position"])
     db.save_contacts(conn, rows)

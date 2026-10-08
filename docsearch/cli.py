@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
+import tempfile
 import random
 import sys
 import time
@@ -13,7 +15,8 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config as config_mod
-from . import db, extract, homoglyph, letters, morph, ocr, scaffold, shell
+from . import db, extract, homoglyph, letters, meta, morph, ocr
+from . import office, scaffold, shell
 from . import sniff, textnorm
 from . import search as search_mod
 from . import indexer
@@ -661,6 +664,125 @@ def cmd_contacts(args) -> int:
 
 
 
+# ------------------------------------------------------------------- legacy
+
+def cmd_legacy(args) -> int:
+    """Прочитать старые форматы Office: .doc, .xls.
+
+    Это не индексация: файлы в индексе уже есть, но только по имени. Здесь
+    у них появляется текст, а вместе с ним организация, договор и всё
+    остальное, что разбирается из содержимого.
+    """
+    cfg = config_mod.load(args.config)
+    exts = [e if e.startswith(".") else "." + e
+            for e in (args.ext or sorted(office.SUPPORTED))]
+    kinds = {office.kind_for(e) for e in exts} - {None}
+    if not kinds:
+        print(f"Неуспех: нечего делать с расширениями {', '.join(exts)}")
+        return 1
+
+    conn = db.connect(cfg.db)
+    if args.redo:
+        print(f"Возвращено в очередь: {db.reset_office(conn, only_failed=False)}")
+    elif args.retry_failed:
+        print(f"Возвращено после неудачи: {db.reset_office(conn)}")
+
+    todo = db.docs_for_office(conn, exts, limit=args.limit)
+    before = db.office_progress(conn, exts)
+    if not todo:
+        print(f"Перегонять нечего: файлов {before['total']}, "
+              f"готово {before['done']}, с ошибкой {before['failed']}")
+        conn.close()
+        return 0
+
+    try:
+        office.check(kinds)
+    except office.OfficeUnavailable as exc:
+        print(f"Неуспех: {exc}")
+        conn.close()
+        return 1
+
+    meta.set_aliases(cfg.org_aliases)
+    overrides = db.overrides_map(conn)
+    print(f"[{_stamp()}] Задача: прочитать {len(todo)} файл(ов) "
+          f"из {before['left']} оставшихся ({', '.join(exts)})")
+
+    started = time.monotonic()
+    done = failed = empty = 0
+    work = Path(tempfile.mkdtemp(prefix="docsearch-legacy-"))
+    try:
+        for chunk in _chunks(todo, args.batch):
+            by_kind: dict[str, list] = {}
+            for row in chunk:
+                kind = office.kind_for(row["ext"])
+                if kind:
+                    by_kind.setdefault(kind, []).append(row)
+
+            for kind, rows in by_kind.items():
+                items = [{
+                    "id": row["id"],
+                    "src": row["path"],
+                    "dst": str(work / f"{row['id']}{office.CONVERTED[row['ext']]}"),
+                } for row in rows]
+                results = office.convert_batch(items, kind, timeout=args.timeout)
+
+                for row in rows:
+                    outcome = results.get(row["id"], {})
+                    target = Path(work / f"{row['id']}{office.CONVERTED[row['ext']]}")
+                    if not outcome.get("ok") or not target.exists():
+                        db.fail_office(conn, row["id"],
+                                       outcome.get("error") or "Office не открыл файл")
+                        failed += 1
+                        continue
+
+                    text = textnorm.normalize(
+                        office.extract_converted(target))[: cfg.max_text_chars]
+                    target.unlink(missing_ok=True)
+                    if not text:
+                        db.fail_office(conn, row["id"], "текста в файле нет")
+                        empty += 1
+                        continue
+
+                    attrs = meta.guess(Path(row["path"]), row["rel_path"], text,
+                                       cfg.own_org, cfg.section_rules)
+                    attrs.pop("organizations", None)
+                    attrs = db.apply_override(attrs, overrides.get(row["path"], {}))
+                    searchable = chr(10).join([row["name"], row["rel_path"], text])
+                    db.save_office(conn, row["id"], row["name"], text,
+                                   morph.lemmatize(searchable), attrs)
+                    done += 1
+
+            conn.commit()
+            if _interactive():
+                seen = done + failed + empty
+                speed = seen / max(time.monotonic() - started, 1) * 60
+                print(f"  прочитано {done}, пусто {empty}, ошибок {failed}, "
+                      f"{speed:.0f} файл/мин", end=chr(13), flush=True)
+    finally:
+        conn.commit()
+        shutil.rmtree(work, ignore_errors=True)
+
+    after = db.office_progress(conn, exts)
+    elapsed = time.monotonic() - started
+    if _interactive():
+        print(" " * 90, end=chr(13))
+    print(f"[{_stamp()}] Сделал: прочитано {done}, пусто {empty}, "
+          f"ошибок {failed} за {elapsed / 60:.1f} мин")
+    print(f"  всего таких файлов {after['total']}, прочитано {after['done']}, "
+          f"осталось {after['left']}")
+    if after["left"]:
+        rate = (done + failed + empty) / max(elapsed, 1)
+        print(f"  на остаток уйдёт ~{after['left'] / max(rate, 0.001) / 60:.0f} мин")
+    conn.close()
+    return 0 if done else 1
+
+
+def _chunks(rows: list, size: int):
+    for i in range(0, len(rows), size):
+        yield rows[i:i + size]
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="docsearch", description="Поиск по архиву документов"
@@ -760,6 +882,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--id", type=int,
                    help="перераспознать один документ — для сравнения настроек")
     s.set_defaults(func=cmd_ocr)
+
+    s = sub.add_parser("legacy",
+                       help="прочитать старые .doc и .xls через Office")
+    s.add_argument("-n", "--limit", type=int, default=None)
+    s.add_argument("--ext", action="append",
+                   help="только эти расширения, например --ext .doc")
+    s.add_argument("--batch", type=int, default=40,
+                   help="сколько файлов на один запуск Office")
+    s.add_argument("--timeout", type=int, default=1800)
+    s.add_argument("--retry-failed", action="store_true")
+    s.add_argument("--redo", action="store_true",
+                   help="перечитать всё заново")
+    s.set_defaults(func=cmd_legacy)
 
     s = sub.add_parser("text", help="показать текст документа целиком")
     s.add_argument("query", nargs="?", default="",

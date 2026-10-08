@@ -101,6 +101,8 @@ OPTIONAL_COLUMNS = {
     "object_code": "TEXT",
     "page_count": "INTEGER",
     "error": "TEXT",
+    "office_status": "TEXT",
+    "office_at": "REAL",
     "ocr_status": "TEXT",
     "ocr_at": "REAL",
     "ocr_chars": "INTEGER",
@@ -596,3 +598,70 @@ def correspondence_bodies(conn: sqlite3.Connection, limit: int = 5000):
         " ORDER BY d.doc_date DESC LIMIT ?",
         (limit,),
     )
+
+
+def docs_for_office(conn: sqlite3.Connection, exts: list[str],
+                    limit: int | None = None) -> list[dict]:
+    """Старые форматы, которые ещё не перегоняли. Мелкие первыми —
+    чтобы результат был виден с первых минут."""
+    marks = ",".join("?" * len(exts))
+    sql = (
+        "SELECT id, path, rel_path, name, ext, size FROM documents"
+        f" WHERE ext IN ({marks}) AND office_status IS NULL ORDER BY size ASC"
+    )
+    params: list = [e.lower() for e in exts]
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return [dict(r) for r in conn.execute(sql, params)]
+
+
+def office_progress(conn: sqlite3.Connection, exts: list[str]) -> dict:
+    marks = ",".join("?" * len(exts))
+    params = [e.lower() for e in exts]
+    total = conn.execute(
+        f"SELECT COUNT(*) c FROM documents WHERE ext IN ({marks})", params
+    ).fetchone()["c"]
+    done = conn.execute(
+        f"SELECT COUNT(*) c FROM documents WHERE ext IN ({marks})"
+        " AND office_status = 'done'", params
+    ).fetchone()["c"]
+    failed = conn.execute(
+        f"SELECT COUNT(*) c FROM documents WHERE ext IN ({marks})"
+        " AND office_status = 'failed'", params
+    ).fetchone()["c"]
+    return {"total": total, "done": done, "failed": failed,
+            "left": total - done - failed}
+
+
+def save_office(conn: sqlite3.Connection, doc_id: int, name: str, body: str,
+                lemmas: str, attrs: dict) -> None:
+    """Записать текст, добытый через Office, и пересчитанные по нему атрибуты."""
+    conn.execute(
+        "UPDATE documents SET office_status = 'done', office_at = ?,"
+        " status = 'ok', section = ?, doc_type = ?, doc_number = ?,"
+        " doc_date = ?, counterparty = ?, object_code = ? WHERE id = ?",
+        (time.time(), attrs.get("section"), attrs.get("doc_type"),
+         attrs.get("doc_number"), attrs.get("doc_date"),
+         attrs.get("counterparty"), attrs.get("object_code"), doc_id),
+    )
+    conn.execute("DELETE FROM doc_fts WHERE rowid = ?", (doc_id,))
+    conn.execute(
+        "INSERT INTO doc_fts (rowid, name, body, lemmas) VALUES (?,?,?,?)",
+        (doc_id, name, body, lemmas),
+    )
+
+
+def fail_office(conn: sqlite3.Connection, doc_id: int, error: str) -> None:
+    conn.execute(
+        "UPDATE documents SET office_status = 'failed', office_at = ?,"
+        " error = ? WHERE id = ?",
+        (time.time(), error[:500], doc_id),
+    )
+
+
+def reset_office(conn: sqlite3.Connection, only_failed: bool = True) -> int:
+    where = "office_status = 'failed'" if only_failed         else "office_status IS NOT NULL"
+    cur = conn.execute(f"UPDATE documents SET office_status = NULL WHERE {where}")
+    conn.commit()
+    return cur.rowcount
