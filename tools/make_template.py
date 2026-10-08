@@ -55,19 +55,24 @@ def strip_numbering(document) -> int:
 
     В исходном письме был нумерованный список, и его разметка остаётся в
     пустых абзацах бланка: Word исправно рисует «1.» и «2.» на пустом
-    месте. Нумерация — свойство содержания, а не бланка; в письме она
-    проставляется по выбору в форме.
+    месте. Нумерация бывает двух видов — прописанная прямо в абзаце и
+    унаследованная от стиля, — и снимать нужно обе. Нумерация это
+    свойство содержания, а не бланка: в письме она задаётся в форме.
     """
     from docx.oxml.ns import qn
 
     removed = 0
     for paragraph in document.paragraphs:
         pPr = paragraph._element.find(qn("w:pPr"))
-        if pPr is None:
-            continue
-        numPr = pPr.find(qn("w:numPr"))
-        if numPr is not None:
-            pPr.remove(numPr)
+        if pPr is not None:
+            numPr = pPr.find(qn("w:numPr"))
+            if numPr is not None:
+                pPr.remove(numPr)
+                removed += 1
+
+        style = (paragraph.style.name or "").lower()
+        if not paragraph.text.strip() and ("list" in style or "список" in style):
+            paragraph.style = document.styles["Normal"]
             removed += 1
     return removed
 

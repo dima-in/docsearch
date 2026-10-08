@@ -574,6 +574,7 @@ def test_template_builder_strips_word_numbering(tmp_path: Path):
     import importlib.util
 
     import docx
+    from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
     source = tmp_path / "письмо.docx"
@@ -584,10 +585,15 @@ def test_template_builder_strips_word_numbering(tmp_path: Path):
     document.add_paragraph("Уважаемый Иван Иванович!")
     document.add_paragraph("Между сторонами заключен договор.")
     document.add_paragraph("Текст письма.")
-    numbered = document.add_paragraph("", style="List Number")
+    # нумерация бывает прямой и унаследованной от стиля — проверяем обе
+    direct = document.add_paragraph("")
+    pPr = direct._element.get_or_add_pPr()
+    pPr.append(OxmlElement("w:numPr"))
+    styled = document.add_paragraph("", style="List Number")
     document.add_paragraph("С уважением,")
-    document.add_paragraph("Руководитель\t\tИванов И.И.")
-    assert numbered._element.find(qn("w:pPr")).find(qn("w:numPr")) is not None
+    document.add_paragraph("Руководитель" + chr(9) * 2 + "Иванов И.И.")
+    assert pPr.find(qn("w:numPr")) is not None
+    assert "List" in styled.style.name
     document.save(str(source))
 
     spec = importlib.util.spec_from_file_location(
@@ -604,6 +610,8 @@ def test_template_builder_strips_word_numbering(tmp_path: Path):
         pPr = paragraph._element.find(qn("w:pPr"))
         if pPr is not None:
             assert pPr.find(qn("w:numPr")) is None
+        if not paragraph.text.strip():
+            assert "List" not in (paragraph.style.name or "")
 
 
 def test_own_organization_printed_in_full(tmp_path: Path):
