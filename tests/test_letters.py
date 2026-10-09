@@ -855,3 +855,60 @@ def test_incoming_letter_adds_its_sender(env):
     assert "ООО «ЕРЛУК»" in orgs
     assert orgs["ООО «ЕРЛУК»"]["person"] == "Лукашину А.М."
     assert "ГУП «МОСВОДОСТОК»" in orgs       # адресат тоже на месте
+
+
+def test_greeting_parsed_from_letter():
+    """Имя и отчество получателя есть только в обращении."""
+    text = chr(10).join([
+        "Генеральному директору", "ГУП «МОСВОДОСТОК»", "Ишханяну К.Р.",
+        "Уважаемый Константин Рафаэлович !", "Текст письма.",
+    ])
+    assert letters.parse_greeting(text) == "Уважаемый Константин Рафаэлович!"
+
+
+def test_greeting_keeps_gender():
+    assert letters.parse_greeting("Уважаемая Марина Александровна") \
+        == "Уважаемая Марина Александровна!"
+
+
+def test_no_greeting():
+    assert letters.parse_greeting("Письмо без обращения") is None
+    assert letters.parse_greeting("") is None
+
+
+def test_greeting_saved_with_the_contact(env):
+    conn, cfg = env
+    doc_id = conn.execute("SELECT MIN(id) id FROM documents").fetchone()["id"]
+    _put(conn, doc_id, chr(10).join([
+        "Генеральному директору", "ООО «СК АВАНГАРД»", "Вороновой М.А.",
+        "Уважаемая Марина Александровна!", "Текст.",
+    ]))
+    conn.commit()
+
+    rows = letters.rebuild_contacts(conn, own_org="ФБ-Строй")
+    found = {r["org"]: r for r in rows}
+    assert found["ООО «СК АВАНГАРД»"]["greeting"] == "Уважаемая Марина Александровна!"
+
+
+def test_blank_paragraphs_collapse(tmp_path: Path):
+    """Вереницу пустых абзацев из бланка приходилось вычищать руками."""
+    import docx
+
+    path = tmp_path / "бланк.docx"
+    document = docx.Document()
+    document.add_paragraph("{{body}}")
+    for _ in range(5):
+        document.add_paragraph("")
+    document.add_paragraph("С уважением,")
+    document.save(str(path))
+
+    head = letters.Letterhead.from_config({**HEAD, "template": str(path)})
+    blob = letters.render({"recipient_org": "ООО «Х»", "body": "Текст."}, head)
+
+    result = docx.Document(BytesIO(blob))
+    runs = 0
+    longest = 0
+    for paragraph in result.paragraphs:
+        runs = 0 if paragraph.text.strip() else runs + 1
+        longest = max(longest, runs)
+    assert longest <= 1

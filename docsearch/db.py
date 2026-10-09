@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     org       TEXT NOT NULL,
     person    TEXT NOT NULL DEFAULT '',
     position  TEXT,
+    greeting  TEXT,
     contract  TEXT,
     letters   INTEGER NOT NULL DEFAULT 0,
     last_date TEXT,
@@ -128,7 +129,8 @@ def migrate(conn: sqlite3.Connection) -> list[str]:
     # справочник адресатов — производные данные: при смене формы его
     # проще выбросить и собрать заново, чем мигрировать
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(contacts)")}
-    if columns and not {"person", "contract", "search_key"} <= columns:
+    if columns and not {"person", "contract", "search_key",
+                        "greeting"} <= columns:
         conn.execute("DROP TABLE contacts")
         conn.executescript(SCHEMA_TABLES)
         added.append("contacts (пересоздан)")
@@ -564,11 +566,11 @@ def save_contacts(conn: sqlite3.Connection, rows: list[dict]) -> int:
     conn.execute("DELETE FROM contacts")
     conn.executemany(
         "INSERT OR REPLACE INTO contacts"
-        " (org, person, position, contract, letters, last_date, search_key)"
-        " VALUES (?,?,?,?,?,?,?)",
+        " (org, person, position, greeting, contract, letters, last_date,"
+        " search_key) VALUES (?,?,?,?,?,?,?,?)",
         [(r["org"], r.get("person") or "", r.get("position"),
-          r.get("contract"), r.get("letters", 0), r.get("last_date"),
-          r.get("search_key")) for r in rows],
+          r.get("greeting"), r.get("contract"), r.get("letters", 0),
+          r.get("last_date"), r.get("search_key")) for r in rows],
     )
     conn.commit()
     return len(rows)
@@ -579,8 +581,8 @@ def contacts(conn: sqlite3.Connection, limit: int = 500) -> list[dict]:
     return [
         dict(r)
         for r in conn.execute(
-            "SELECT org, person, position, contract, letters, last_date,"
-            " search_key FROM contacts"
+            "SELECT org, person, position, greeting, contract, letters,"
+            " last_date, search_key FROM contacts"
             " ORDER BY letters DESC,"
             " ru_lower(substr(org, instr(org, '«') + 1)) LIMIT ?",
             (limit,),

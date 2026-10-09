@@ -18,6 +18,9 @@ CONTRACTORS = ["ООО СтройМонтаж", "АО ЭнергоСервис",
 OBJECTS = ["ПС-110/10-Северная", "КНС-4", "Котельная-3", "Эстакада-2"]
 MATERIALS = ["арматура А500С", "щебень фр. 20-40", "бетон В25 W6",
              "кабель АВБбШв 4х95", "трубы ПЭ100 SDR17"]
+FULL_NAMES = ["Марина Александровна", "Александр Вадимович",
+              "Евгений Владимирович", "Иван Иванович", "Ольга Петровна"]
+
 PEOPLE = ["Вороновой М.А.", "Белякову А.В.", "Севрюкову Е.В.",
           "Петрову И.И.", "Смирновой О.П."]
 
@@ -26,20 +29,37 @@ WORKS = ["устройство монолитного ростверка", "пр
          "испытание трубопровода на прочность"]
 
 
+def greeting_for(full_name: str) -> str:
+    """Обращение с учётом рода: отчество на «вна» — женское."""
+    female = full_name.split()[-1].endswith(("вна", "чна"))
+    return f"Уважаем{'ая' if female else 'ый'} {full_name}!"
+
+
 def letter_text(num: int, date: str, contractor: str, obj: str) -> str:
-    return (
-        f"Исх. № {num}/ПТО от {date}\n\n"
-        f"Генеральному директору" + chr(10) + contractor + chr(10)
-        + PEOPLE[CONTRACTORS.index(contractor) % len(PEOPLE)] + chr(10) * 2 +
-        f"Объект: {obj}\nШифр: {random.randint(100, 999)}-{random.randint(10, 99)}-ПЗ\n\n"
-        f"Уважаемые коллеги!\n\n"
+    person = PEOPLE[CONTRACTORS.index(contractor) % len(PEOPLE)]
+    full_name = FULL_NAMES[CONTRACTORS.index(contractor) % len(FULL_NAMES)]
+    shifr = f"{random.randint(100, 999)}-{random.randint(10, 99)}-ПЗ"
+    return chr(10).join([
+        f"Исх. № {num}/ПТО от {date}",
+        "",
+        "Генеральному директору",
+        contractor,
+        person,
+        "",
+        f"Объект: {obj}",
+        f"Шифр: {shifr}",
+        "",
+        greeting_for(full_name),
+        "",
         f"Направляем в Ваш адрес уведомление о необходимости поставки "
         f"{random.choice(MATERIALS)} в объёме {random.randint(10, 400)} т "
-        f"в срок до {date}. Задержка поставки влечёт смещение сроков по работам: "
-        f"{random.choice(WORKS)}.\n\n"
-        f"Просим подтвердить готовность и направить сопроводительную документацию.\n\n"
-        f"Начальник ПТО\n"
-    )
+        f"в срок до {date}. Задержка поставки влечёт смещение сроков по "
+        f"работам: {random.choice(WORKS)}.",
+        "",
+        "Просим подтвердить готовность и направить документацию.",
+        "",
+        "Начальник ПТО",
+    ])
 
 
 def act_text(num: int, date: str, contractor: str, obj: str) -> str:

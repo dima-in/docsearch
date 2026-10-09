@@ -532,7 +532,8 @@ async function openLetter() {
   ownOrg = draft.own_org || "";
   buildObject = draft.object || "";
   for (const id of ["l-recipient", "l-recipient-org", "l-recipient-person",
-                    "l-recipient-position", "l-contract", "l-intro"]) {
+                    "l-recipient-position", "l-contract", "l-intro",
+                    "l-greeting"]) {
     document.getElementById(id).value = "";
   }
   document.getElementById("recipient-hint").textContent = "";
@@ -667,6 +668,10 @@ function pickContact(contact) {
   if (contact.contract && !document.getElementById("l-contract").value) {
     document.getElementById("l-contract").value = contact.contract;
   }
+  // обращение берём из прошлых писем: имя и отчество больше взять неоткуда,
+  // в блоке «кому» стоят только фамилия и инициалы
+  const greeting = document.getElementById("l-greeting");
+  if (contact.greeting && !greeting.value) greeting.value = contact.greeting;
   hideCombo();
   updateIntro();
 }

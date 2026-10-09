@@ -423,6 +423,34 @@ def drop_empty_numbering(document) -> int:
     return removed
 
 
+def collapse_blank_paragraphs(document, keep: int = 1) -> int:
+    """Схлопнуть подряд идущие пустые абзацы.
+
+    В бланке, сделанном из настоящего письма, на месте выброшенного
+    содержания остаётся вереница пустых абзацев. Один пустой абзац — это
+    отбивка между блоками, пять подряд — дыра, которую приходится
+    вычищать руками в каждом письме.
+    """
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    removed = 0
+    run = 0
+    for child in list(document.element.body.iterchildren()):
+        tag = child.tag.split("}")[-1]
+        if tag != "p":
+            run = 0
+            continue
+        if Paragraph(child, document).text.strip():
+            run = 0
+            continue
+        run += 1
+        if run > keep:
+            child.getparent().remove(child)
+            removed += 1
+    return removed
+
+
 def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes:
     """Заполнить бланк организации. Вёрстка, логотип и поля берутся из него."""
     import docx
@@ -467,6 +495,7 @@ def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes
 
     walk(document)
     drop_empty_numbering(document)
+    collapse_blank_paragraphs(document)
 
     buffer = io.BytesIO()
     document.save(buffer)
@@ -739,6 +768,27 @@ def to_addressee_form(person: str, position: str) -> tuple[str, str]:
             morph.phrase_to_dative(position or ""))
 
 
+RE_GREETING = re.compile(
+    r"^\s*(Уважаем\w{1,4}[^!\n]{2,70}!?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def parse_greeting(text: str) -> str | None:
+    """Обращение к адресату: «Уважаемый Евгений Владимирович!».
+
+    Имя и отчество получателя больше взять неоткуда: в блоке «кому»
+    стоят только фамилия и инициалы. А в обращении они написаны полностью
+    и ровно в той форме, в какой их принято писать этому человеку.
+    """
+    head = (text or "")[:HEAD_LIMIT].replace(" | ", chr(10))
+    match = RE_GREETING.search(head)
+    if not match:
+        return None
+    greeting = " ".join(match.group(1).split()).rstrip(" !")
+    return greeting + "!" if greeting else None
+
+
 def parse_sender(text: str, own_org: str | None = None,
                  addressee_org: str | None = None) -> dict | None:
     """Кто прислал письмо: организация, должность и человек из подписи.
@@ -788,19 +838,21 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
     seen = 0
 
     def remember(who: dict, date: str | None, contract_party: str | None,
-                 contract: str | None) -> None:
+                 contract: str | None, greeting: str | None = None) -> None:
         key_org = org_key(who["org"])
         if own and key_org == own:
             return
         key = (key_org, person_key(who["person"] or ""))
         entry = found.setdefault(key, {
-            "orgs": [], "persons": [], "positions": [],
+            "orgs": [], "persons": [], "positions": [], "greetings": [],
             "letters": 0, "last_date": None, "contract": None,
         })
         entry["letters"] += 1
         entry["orgs"].append(who["org"])
         entry["persons"].append(who["person"] or "")
         entry["positions"].append(who["position"] or "")
+        if greeting:
+            entry["greetings"].append(greeting)
         # письма идут от свежих к старым, первое и есть актуальное
         if entry["last_date"] is None:
             entry["last_date"] = date
@@ -822,7 +874,9 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
 
         addressee = parse_addressee(body)
         if addressee:
-            remember(addressee, row["doc_date"], party, contract)
+            # обращение в письме адресовано получателю, не отправителю
+            remember(addressee, row["doc_date"], party, contract,
+                     parse_greeting(body))
 
         sender = parse_sender(body, own_org,
                               addressee["org"] if addressee else None)
@@ -835,6 +889,7 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
             "org": _most_common(entry["orgs"]),
             "person": _most_common(entry["persons"]) or "",
             "position": _most_common(entry["positions"]),
+            "greeting": _most_common(entry["greetings"]),
             "contract": entry["contract"] or contracts.get(key_org),
             "letters": entry["letters"],
             "last_date": entry["last_date"],
