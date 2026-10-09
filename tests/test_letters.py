@@ -87,12 +87,39 @@ def test_docx_contains_the_fields():
         assert expected in xml, expected
 
 
-def test_file_name_is_safe_and_readable():
-    name = letters.file_name({"number": "РТП-176", "date": "2026-10-06",
-                              "subject": "Поставка арматуры А500С"})
-    assert name == "Исх РТП-176 от 06.10.2026 Поставка арматуры А500С.docx"
-    bad = letters.file_name({"subject": "Смета 1/2 по объекту"})
-    assert "/" not in bad
+def test_file_name_follows_the_archive_convention():
+    """В папке исходящих принято «Исх. РТП-1337 ПКС Инжиниринг (о чём)»."""
+    assert letters.file_name({
+        "number": "РТП-1338", "recipient_org": "ООО «ПКС-Инжиниринг»",
+        "subject": "ответ УКМ-299", "date": "2026-10-09",
+    }) == "Исх. РТП-1338 ПКС-Инжиниринг (ответ УКМ-299).docx"
+
+
+def test_file_name_without_subject():
+    assert letters.file_name({
+        "number": "РТП-1340", "recipient_org": "ООО «М-СТРОЙ»",
+    }) == "Исх. РТП-1340 М-СТРОЙ.docx"
+
+
+def test_file_name_without_organization():
+    assert letters.file_name({
+        "number": "РТП-1341", "subject": "общее совещание",
+    }) == "Исх. РТП-1341 (общее совещание).docx"
+
+
+def test_file_name_has_no_forbidden_characters():
+    name = letters.file_name({"subject": "Смета 1/2 по объекту: раздел ОВ"})
+    for bad in ("/", chr(92), ":", "*", "?", '"', "<", ">", "|"):
+        assert bad not in name
+
+
+def test_file_name_falls_back():
+    assert letters.file_name({}) == "Письмо.docx"
+
+
+def test_short_org_strips_the_legal_form():
+    assert letters.short_org("ООО «ПКС-Инжиниринг»") == "ПКС-Инжиниринг"
+    assert letters.short_org("ГУП «Мосводосток»") == "Мосводосток"
 
 
 def test_draft_endpoint(env):

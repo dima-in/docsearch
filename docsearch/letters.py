@@ -294,20 +294,44 @@ def build_docx(letter: dict, head: Letterhead) -> bytes:
     return buffer.getvalue()
 
 
-def file_name(letter: dict) -> str:
-    """Имя файла по тем же правилам, по каким названы письма в архиве."""
-    parts = []
-    if letter.get("number"):
-        parts.append(f"Исх {letter['number']}")
-    if letter.get("date"):
-        year, month, day = letter["date"].split("-")
-        parts.append(f"от {day}.{month}.{year}")
-    if letter.get("subject"):
-        parts.append(letter["subject"][:60])
-    name = " ".join(parts) or "Письмо"
-    for bad in ('/', chr(92), ':', '*', '?', '"', '<', '>', '|'):
+FORBIDDEN_IN_NAME = ('/', chr(92), ':', '*', '?', '"', '<', '>', '|')
+MAX_SUBJECT_IN_NAME = 60
+
+
+def short_org(org: str) -> str:
+    """Короткое имя организации для имени файла: без формы и кавычек."""
+    from . import meta
+
+    return " ".join(meta.strip_form(org or "").split())
+
+
+def safe_name(name: str) -> str:
+    for bad in FORBIDDEN_IN_NAME:
         name = name.replace(bad, "-")
-    return name.strip() + ".docx"
+    return " ".join(name.split()).strip(" .-")
+
+
+def file_name(letter: dict) -> str:
+    """Имя файла по тем же правилам, по каким письма названы в архиве.
+
+    В папке исходящих принято «Исх. РТП-1337 ПКС Инжиниринг (ответ
+    УКМ-299)»: номер, с кем переписка, в скобках о чём. Дату в имя не
+    пишут — она и так в номере по порядку.
+    """
+    number = safe_name(letter.get("number") or "")
+    company = safe_name(short_org(letter.get("recipient_org") or ""))
+    subject = safe_name(letter.get("subject") or "")[:MAX_SUBJECT_IN_NAME]
+
+    parts = []
+    if number:
+        parts.append(f"Исх. {number}")
+    if company:
+        parts.append(company)
+    if subject:
+        parts.append(f"({subject})")
+
+    name = " ".join(parts).strip()
+    return (name or "Письмо") + ".docx"
 
 
 def register(conn: sqlite3.Connection, path: str, letter: dict) -> None:
