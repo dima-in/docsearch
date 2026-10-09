@@ -648,23 +648,49 @@ def cmd_contacts(args) -> int:
                 print(" " * 70, end=chr(13))
             print(f"[{_stamp()}] Сделал: адресатов {len(rows)}")
 
-        known = db.contacts(conn, limit=args.limit)
-        if not known:
+        everyone = db.contacts(conn, limit=10000)
+        if not everyone:
             print("Адресатов не нашлось — в индексе нет разобранной переписки")
             return 1
-        with_contract = sum(1 for i in known if i["contract"])
-        without_person = sum(1 for i in known if not i["person"])
+
+        filled = {
+            "greeting": sum(1 for i in everyone if i["greeting"]),
+            "contract": sum(1 for i in everyone if i["contract"]),
+            "person": sum(1 for i in everyone if i["person"]),
+        }
+        total = len(everyone)
         print()
-        print(f"Адресатов {len(known)}: с договором {with_contract}, "
-              f"без фамилии {without_person}")
+        print(f"Адресатов {total}")
+        for field, title in (("person", "с фамилией"),
+                             ("greeting", "с обращением"),
+                             ("contract", "с договором")):
+            share = filled[field] / total * 100
+            print(f"  {title:<14}{filled[field]:>5} из {total}"
+                  f"   нет у {total - filled[field]}  ({share:.0f}%)")
+
+        shown = everyone
+        if args.missing:
+            shown = [i for i in everyone if not i[args.missing]]
+            titles = {"greeting": "обращения", "contract": "договора",
+                      "person": "фамилии"}
+            print()
+            print(f"Ниже только те, у кого нет {titles[args.missing]}:")
+        shown = shown[:args.limit]
+
         print()
-        for item in known:
-            person = item["person"] or "фамилия не разобрана"
+        for item in shown:
             print(f"  {item['org']}")
-            print(f"    {item['position'] or '—'}   {person}"
+            print(f"    {item['position'] or '—'}   "
+                  f"{item['person'] or 'фамилия не разобрана'}"
                   f"   писем {item['letters']}")
+            if item["greeting"]:
+                print(f"    обращение: {item['greeting']}")
             if item["contract"]:
                 print(f"    договор {item['contract']}")
+        if len(shown) < (len(everyone) if not args.missing else
+                         sum(1 for i in everyone if not i[args.missing])):
+            print()
+            print(f"  показаны первые {len(shown)} — остальные с флагом -n")
         return 0
     finally:
         conn.close()
@@ -807,6 +833,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("contacts", help="адресаты из прошлых писем")
     s.add_argument("--rebuild", action="store_true", help="пересобрать заново")
+    s.add_argument("--missing", choices=("greeting", "contract", "person"),
+                   help="показать только тех, у кого этого нет")
     s.add_argument("-n", "--limit", type=int, default=50)
     s.set_defaults(func=cmd_contacts)
 
