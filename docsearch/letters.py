@@ -835,8 +835,29 @@ def parse_greeting(text: str) -> str | None:
     return greeting + "!" if greeting else None
 
 
+def is_ours(person: str, own_people) -> bool:
+    """Наш ли это человек.
+
+    Подпись на исходящем письме — наша, и отправителя из неё выводить
+    нельзя: если организация в письме распозналась неверно, подписант
+    оказывается адресатом несуществующей переписки. Фамилии сравниваем по
+    начальной форме: в подписи именительный, в адресате дательный.
+    """
+    from . import morph
+
+    if not person or not own_people:
+        return False
+    parts = person.replace(".", " ").split()
+    if not parts:
+        return False
+    surname = morph.surname(parts[0])
+    return any(morph.surname(str(name).split()[0]) == surname
+               for name in own_people if str(name).strip())
+
+
 def parse_sender(text: str, own_org: str | None = None,
-                 addressee_org: str | None = None) -> dict | None:
+                 addressee_org: str | None = None,
+                 own_people=None) -> dict | None:
     """Кто прислал письмо: организация, должность и человек из подписи.
 
     Входящие письма дают контрагентов, которых среди адресатов нет: если
@@ -865,10 +886,13 @@ def parse_sender(text: str, own_org: str | None = None,
 
     person, position = to_addressee_form(match.group("person"),
                                          match.group("position"))
+    if is_ours(person, own_people):
+        return None       # письмо наше, подпись наша — отправителя тут нет
     return {"org": sender, "position": position, "person": person}
 
 
-def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[dict]:
+def rebuild_contacts(conn, progress=None, own_org: str | None = None,
+                     own_people=None) -> list[dict]:
     """Собрать справочник по переписке — и по адресатам, и по отправителям.
 
     У организации бывает несколько адресатов, поэтому ключ — пара
@@ -887,6 +911,10 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
                  contract: str | None, greeting: str | None = None) -> None:
         key_org = org_key(who["org"])
         if own and key_org == own:
+            return
+        if is_ours(who.get("person"), own_people):
+            # наш сотрудник адресатом быть не может, как бы ни разобралась
+            # организация в письме
             return
         key = (key_org, person_key(who["person"] or ""))
         entry = found.setdefault(key, {
@@ -925,7 +953,8 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
                      parse_greeting(body))
 
         sender = parse_sender(body, own_org,
-                              addressee["org"] if addressee else None)
+                              addressee["org"] if addressee else None,
+                              own_people)
         if sender:
             remember(sender, row["doc_date"], party, contract)
 
@@ -948,11 +977,11 @@ def rebuild_contacts(conn, progress=None, own_org: str | None = None) -> list[di
     return rows
 
 
-def recipients(conn, own_org: str | None = None) -> list[dict]:
+def recipients(conn, own_org: str | None = None, own_people=None) -> list[dict]:
     """Адресаты для формы письма. Если справочник пуст — собрать на месте."""
     known = db.contacts(conn)
     if not known:
-        rebuild_contacts(conn, own_org=own_org)
+        rebuild_contacts(conn, own_org=own_org, own_people=own_people)
         known = db.contacts(conn)
     if known:
         return known

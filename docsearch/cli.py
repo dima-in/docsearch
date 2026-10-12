@@ -643,7 +643,8 @@ def cmd_contacts(args) -> int:
                     print(f"  просмотрено {seen}, найдено {found}",
                           end=chr(13), flush=True)
 
-            rows = letters.rebuild_contacts(conn, progress, cfg.own_org)
+            rows = letters.rebuild_contacts(conn, progress, cfg.own_org,
+                                            cfg.own_people)
             if _interactive():
                 print(" " * 70, end=chr(13))
             print(f"[{_stamp()}] Сделал: адресатов {len(rows)}")

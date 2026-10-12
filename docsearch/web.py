@@ -204,7 +204,7 @@ def create_app(cfg: Config) -> FastAPI:
                 "number_after": letters.previous_number(
                     conn, head.number_prefix, head.number_folder),
                 "date": date.today().isoformat(),
-                "recipients": letters.recipients(conn, cfg.own_org),
+                "recipients": letters.recipients(conn, cfg.own_org, cfg.own_people),
                 "signer_position": head.signer_position,
                 "signer_name": head.signer_name,
                 "letterhead": head.header_lines(),
@@ -222,7 +222,8 @@ def create_app(cfg: Config) -> FastAPI:
         """Пересобрать справочник адресатов по переписке."""
         conn = connect()
         try:
-            rows = letters.rebuild_contacts(conn, own_org=cfg.own_org)
+            rows = letters.rebuild_contacts(conn, own_org=cfg.own_org,
+                                     own_people=cfg.own_people)
             return JSONResponse({"found": len(rows)})
         finally:
             conn.close()

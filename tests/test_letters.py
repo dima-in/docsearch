@@ -1139,3 +1139,50 @@ def test_batch_without_recipients_is_refused(env):
     client = TestClient(create_app(cfg))
     assert client.post("/api/letter/batch",
                        json={"recipients": []}).status_code == 400
+
+
+OUR_OUTGOING = chr(10).join([
+    "ООО «ФБ-СТРОЙ»",
+    "Генеральному директору", "ООО «ПД-Проект»", "Демину А.А.",
+    "Между ООО «Мосренстрой-6» и ООО «ФБ-Строй» заключен договор подряда"
+    " №ЛС-СМР-Тайн от 18.05.2023 на выполнение работ",
+    "С уважением,",
+    "Руководитель проекта Стерхов Д.А.",
+])
+OUR_PEOPLE = ["Стерхов", "Бабкин", "Глухов"]
+
+
+def test_our_signer_is_not_a_sender():
+    """Подпись на нашем исходящем — наша, отправителя из неё нет."""
+    assert letters.parse_sender(OUR_OUTGOING, "ФБ-Строй", "ООО «ПД-Проект»",
+                                OUR_PEOPLE) is None
+
+
+def test_without_the_list_our_signer_leaks():
+    """Без списка своих организация из преамбулы плюс наша подпись дают
+    несуществующего адресата — так Стерхов и попал в справочник."""
+    leaked = letters.parse_sender(OUR_OUTGOING, "ФБ-Строй", "ООО «ПД-Проект»")
+    assert leaked["person"] == "Стерхову Д.А."
+
+
+def test_is_ours_matches_any_case_form():
+    assert letters.is_ours("Стерхову Д.А.", OUR_PEOPLE)
+    assert letters.is_ours("Стерхов Д.А.", OUR_PEOPLE)
+    assert letters.is_ours("Глухову А. В.", OUR_PEOPLE)
+    assert not letters.is_ours("Севрюкову Е.В.", OUR_PEOPLE)
+    assert not letters.is_ours("Стерхову Д.А.", [])
+
+
+def test_our_person_never_becomes_an_addressee(env):
+    """Даже если организация в письме распозналась неверно."""
+    conn, cfg = env
+    doc_id = conn.execute("SELECT MIN(id) id FROM documents").fetchone()["id"]
+    _put(conn, doc_id, chr(10).join([
+        "Руководителю проекта", "ООО «Мосренстрой-6»", "Стерхову Д.А.",
+        "Текст письма.",
+    ]))
+    conn.commit()
+
+    rows = letters.rebuild_contacts(conn, own_org="ФБ-Строй",
+                                    own_people=OUR_PEOPLE)
+    assert not any("Стерхов" in (r["person"] or "") for r in rows)

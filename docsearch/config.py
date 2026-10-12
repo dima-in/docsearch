@@ -42,6 +42,7 @@ class Config:
     exclude_dirs: set[str] = field(default_factory=set)
     exclude_globs: list[str] = field(default_factory=list)
     own_org: str | None = None
+    own_people: list = field(default_factory=list)
     org_aliases: dict = field(default_factory=dict)
     section_rules: dict = field(default_factory=dict)
     letterhead: dict = field(default_factory=dict)
@@ -123,6 +124,7 @@ def load(path: str | os.PathLike | None = None) -> Config:
         # сравниваем имена папок без учёта регистра
         exclude_dirs=set(idx.get("exclude_dirs", [])),
         own_org=idx.get("own_organization") or None,
+        own_people=list(idx.get("own_people") or []),
         org_aliases=idx.get("organization_aliases") or {},
         section_rules=idx.get("sections") or {},
         letterhead=_with_template(raw.get("letterhead") or {}, resolve),
