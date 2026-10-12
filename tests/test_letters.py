@@ -939,3 +939,77 @@ def test_blank_paragraphs_collapse(tmp_path: Path):
         runs = 0 if paragraph.text.strip() else runs + 1
         longest = max(longest, runs)
     assert longest <= 1
+
+
+def _load_template_tool():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "make_template",
+        Path(__file__).resolve().parent.parent / "tools" / "make_template.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_letterhead_indents_are_evened_out(tmp_path: Path):
+    """Строки шапки отодвинуты от логотипа, но на разное расстояние —
+    при выравнивании по центру реквизиты разъезжаются."""
+    import docx
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm
+
+    path = tmp_path / "бланк.docx"
+    document = docx.Document()
+    for text, indent in [("ООО «ФБ-СТРОЙ»", 5.5),
+                         ("Юридический адрес: Москва", 5.5),
+                         ("ОГРН 1135029002547 ИНН 5029172308", 5.0),
+                         ("info@fbstroy.ru", 5.5)]:
+        paragraph = document.add_paragraph(text)
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paragraph.paragraph_format.left_indent = Cm(indent)
+    document.add_table(rows=1, cols=2)
+    document.add_paragraph("{{body}}")
+    document.save(str(path))
+
+    module = _load_template_tool()
+    report = module.align_letterhead(docx.Document(str(path)))
+    assert report and "выровнены" in report[0]
+
+    fixed = docx.Document(str(path))
+    module.align_letterhead(fixed)
+    indents = {int(p.paragraph_format.left_indent)
+               for p in fixed.paragraphs[:4] if p.text.strip()}
+    assert len(indents) == 1
+
+
+def test_alignment_leaves_a_tidy_letterhead_alone(tmp_path: Path):
+    import docx
+    from docx.shared import Cm
+
+    path = tmp_path / "бланк.docx"
+    document = docx.Document()
+    for text in ("ООО «Тест»", "Москва"):
+        paragraph = document.add_paragraph(text)
+        paragraph.paragraph_format.left_indent = Cm(5)
+    document.add_table(rows=1, cols=2)
+    document.save(str(path))
+
+    module = _load_template_tool()
+    assert module.align_letterhead(docx.Document(str(path))) == []
+
+
+def test_letterhead_block_stops_at_the_table(tmp_path: Path):
+    """Шапка — это всё до таблицы с номером; текст письма трогать нельзя."""
+    import docx
+
+    path = tmp_path / "бланк.docx"
+    document = docx.Document()
+    document.add_paragraph("ООО «Тест»")
+    document.add_table(rows=1, cols=2)
+    document.add_paragraph("{{body}}")
+    document.save(str(path))
+
+    module = _load_template_tool()
+    heads = module.letterhead_paragraphs(docx.Document(str(path)))
+    assert [p.text for p in heads] == ["ООО «Тест»"]

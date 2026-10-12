@@ -10,6 +10,10 @@
 
     python tools/make_template.py --show templates/письмо.docx
 
+Выровнять отступы в шапке, не пересобирая шаблон:
+
+    python tools/make_template.py --align templates/письмо.docx
+
 Старый .doc сначала пересохраните в .docx — Word умеет это сам.
 
 Получившийся шаблон правится в Word как обычный документ: подстановки —
@@ -77,6 +81,55 @@ def strip_numbering(document) -> int:
     return removed
 
 
+def letterhead_paragraphs(document):
+    """Абзацы шапки — всё до первой таблицы с номером и адресатом."""
+    from docx.text.paragraph import Paragraph
+
+    result = []
+    for child in document.element.body.iterchildren():
+        tag = child.tag.split("}")[-1]
+        if tag == "tbl":
+            break
+        if tag == "p":
+            result.append(Paragraph(child, document))
+    return result
+
+
+def align_letterhead(document) -> list[str]:
+    """Выровнять отступы в шапке по одному значению.
+
+    Строки шапки отодвинуты вправо, чтобы не налезать на логотип, но
+    отступ у них разный — у одной строки 5,0 см, у остальных 5,5. При
+    выравнивании по центру каждая строка центруется в своём поле, и
+    реквизиты визуально разъезжаются.
+    """
+    from collections import Counter
+
+    paragraphs = [p for p in letterhead_paragraphs(document) if p.text.strip()]
+    if not paragraphs:
+        return []
+
+    indents = [p.paragraph_format.left_indent for p in paragraphs]
+    known = [int(value) for value in indents if value is not None]
+    if not known:
+        return []
+
+    common = Counter(known).most_common(1)[0][0]
+    from docx.shared import Emu
+
+    changed = 0
+    for paragraph in paragraphs:
+        current = paragraph.paragraph_format.left_indent
+        if current is None or int(current) != common:
+            paragraph.paragraph_format.left_indent = Emu(common)
+            paragraph.paragraph_format.right_indent = None
+            changed += 1
+
+    if not changed:
+        return []
+    return [f"выровнены отступы в шапке: {changed} строк(и) по {Emu(common).cm:.2f} см"]
+
+
 def build(source: str, target: str) -> list[str]:
     import docx
 
@@ -139,6 +192,7 @@ def build(source: str, target: str) -> list[str]:
     if state == "body_done":
         report.append("подпись не найдена — допишите {{signer_position}} вручную")
 
+    report += align_letterhead(document)
     numbered = strip_numbering(document)
     if numbered:
         report.append(f"снята нумерация с абзацев: {numbered}")
@@ -176,9 +230,30 @@ def show(template: str) -> int:
     return 0
 
 
+def align_only(template: str) -> int:
+    """Поправить отступы в готовом шаблоне, не пересобирая его."""
+    import docx
+
+    document = docx.Document(template)
+    report = align_letterhead(document)
+    strip = strip_numbering(document)
+    if strip:
+        report.append(f"снята нумерация с абзацев: {strip}")
+    if not report:
+        print("Менять нечего: отступы в шапке уже одинаковые")
+        return 0
+    document.save(template)
+    print(f"Сделал: {template}")
+    for line in report:
+        print(f"  {line}")
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--show":
         return show(sys.argv[2])
+    if len(sys.argv) == 3 and sys.argv[1] == "--align":
+        return align_only(sys.argv[2])
     if len(sys.argv) != 3:
         print(__doc__)
         return 1
