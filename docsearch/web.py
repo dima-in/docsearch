@@ -249,6 +249,38 @@ def create_app(cfg: Config) -> FastAPI:
                      f"attachment; filename*=UTF-8''{quoted}"},
         )
 
+    @app.post("/api/letter/batch")
+    def api_letter_batch(payload: dict = Body(...)) -> Response:
+        """Рассылка: одно письмо многим, у каждого свой номер."""
+        head = letters.Letterhead.from_config(cfg.letterhead)
+        if not head.name:
+            raise HTTPException(400, "В конфиге не заполнен раздел letterhead")
+
+        recipients = payload.get("recipients") or []
+        if not recipients:
+            raise HTTPException(400, "Не выбран ни один адресат")
+
+        conn = connect()
+        try:
+            files = letters.build_batch(conn, payload, recipients, head,
+                                        cfg.own_org, head.number_folder)
+        finally:
+            conn.close()
+
+        first = files[0][0].split(" (")[0].replace(".docx", "")
+        word = "писем"
+        if len(files) % 10 == 1 and len(files) % 100 != 11:
+            word = "письмо"
+        elif len(files) % 10 in (2, 3, 4) and len(files) % 100 not in (12, 13, 14):
+            word = "письма"
+        name = f"Рассылка {len(files)} {word} ({first}).zip"
+        return Response(
+            content=letters.pack(files),
+            media_type="application/zip",
+            headers={"Content-Disposition":
+                     f"attachment; filename*=UTF-8''{quote(name)}"},
+        )
+
     @app.get("/api/stats")
     def api_stats() -> JSONResponse:
         conn = connect()

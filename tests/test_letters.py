@@ -1065,3 +1065,77 @@ def test_date_in_the_number_line_is_numeric():
 def test_long_date_still_available():
     """Словесная форма нужна там, где место не ограничено."""
     assert letters.ru_date("2024-03-19") == "19 марта 2024 г."
+
+
+def test_batch_gives_each_recipient_its_own_number(env):
+    """Рассылка: один текст многим, но номер у каждого письма свой."""
+    conn, cfg = env
+    head = letters.Letterhead.from_config(HEAD)
+    recipients = [
+        {"org": "ООО «Маренго»", "person": "Белякову А.В.",
+         "position": "Генеральному директору", "contract": "№1 от 01.01.2025"},
+        {"org": "ООО «Высота»", "person": "Иванову И.И.",
+         "position": "Генеральному директору", "contract": "№2 от 02.02.2025"},
+    ]
+    files = letters.build_batch(conn, {"subject": "Запрос", "body": "Текст."},
+                                recipients, head)
+    assert len(files) == 2
+    names = [name for name, _ in files]
+    assert "РТП-176" in names[0] and "РТП-177" in names[1]
+    assert "Маренго" in names[0] and "Высота" in names[1]
+
+
+def test_batch_keeps_each_contract_and_greeting(env):
+    """Чужой договор в шапке рассылки — это именно то, чего нельзя."""
+    conn, cfg = env
+    head = letters.Letterhead.from_config(HEAD)
+    recipients = [
+        {"org": "ООО «Маренго»", "person": "Белякову А.В.",
+         "contract": "№1 от 01.01.2025",
+         "greeting": "Уважаемый Александр Вадимович!"},
+        {"org": "ООО «Высота»", "person": "Иванову И.И.",
+         "contract": "№2 от 02.02.2025",
+         "greeting": "Уважаемый Иван Иванович!"},
+    ]
+    files = letters.build_batch(conn, {"body": "Текст."}, recipients, head)
+    first = read_all(files[0][1])
+    second = read_all(files[1][1])
+    assert any("№1 от 01.01.2025" in line for line in first)
+    assert any("Уважаемый Александр Вадимович!" in line for line in first)
+    assert any("№2 от 02.02.2025" in line for line in second)
+    assert not any("№1 от 01.01.2025" in line for line in second)
+
+
+def test_batch_file_names_do_not_collide(env):
+    """У одной организации может быть два адресата — имена разойдутся."""
+    conn, cfg = env
+    head = letters.Letterhead.from_config(HEAD)
+    recipients = [
+        {"org": "ООО «Маренго»", "person": "Белякову А.В."},
+        {"org": "ООО «Маренго»", "person": "Иванову И.И."},
+    ]
+    files = letters.build_batch(conn, {}, recipients, head)
+    names = [name for name, _ in files]
+    assert len(set(names)) == 2
+
+
+def test_batch_endpoint_returns_a_zip(env):
+    import zipfile
+
+    conn, cfg = env
+    client = TestClient(create_app(cfg))
+    response = client.post("/api/letter/batch", json={
+        "subject": "Запрос", "body": "Текст.",
+        "recipients": [{"org": "ООО «Маренго»"}, {"org": "ООО «Высота»"}],
+    })
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert len(archive.namelist()) == 2
+
+
+def test_batch_without_recipients_is_refused(env):
+    conn, cfg = env
+    client = TestClient(create_app(cfg))
+    assert client.post("/api/letter/batch",
+                       json={"recipients": []}).status_code == 400

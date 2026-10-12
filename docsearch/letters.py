@@ -293,7 +293,13 @@ def build_docx(letter: dict, head: Letterhead) -> bytes:
     greeting = letter.get("greeting") or "Уважаемые коллеги!"
     paragraph(greeting, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=12)
 
-    for block in (letter.get("body") or "").split("\n"):
+    # преамбула идёт первым абзацем и в нумерацию списка не попадает
+    blocks = []
+    if (letter.get("intro") or "").strip():
+        blocks.append(letter["intro"].strip())
+    blocks += format_body(letter.get("body") or "",
+                          letter.get("body_format", "text"))
+    for block in blocks:
         paragraph(block.strip(), align=WD_ALIGN_PARAGRAPH.JUSTIFY,
                   space_after=6)
 
@@ -954,3 +960,78 @@ def recipients(conn, own_org: str | None = None) -> list[dict]:
     return [{"org": org, "person": "", "position": None, "contract": None,
              "letters": 0, "search_key": search_key(org)}
             for org in known_recipients(conn)]
+
+
+def next_numbers(conn, prefix: str, folder: str = "", count: int = 1) -> list[str]:
+    """Подряд идущие свободные номера — для рассылки одного письма многим."""
+    highest = highest_sane(numbers_for(conn, prefix, folder))
+    return [f"{prefix}-{highest + i}" if prefix else str(highest + i)
+            for i in range(1, count + 1)]
+
+
+def letter_for(recipient: dict, letter: dict, number: str,
+               head: Letterhead, own_org: str | None = None) -> dict:
+    """Письмо одному адресату из общего черновика.
+
+    Обращение, договор и преамбула у каждого свои: рассылка одного и того
+    же текста с чужим договором в шапке — это именно то, чего в
+    переписке допускать нельзя.
+    """
+    one = dict(letter)
+    one["number"] = number
+    one["recipient_org"] = recipient.get("org") or ""
+    one["recipient_person"] = recipient.get("person") or ""
+    one["recipient_position"] = recipient.get("position") or ""
+
+    if recipient.get("greeting"):
+        one["greeting"] = recipient["greeting"]
+    elif not letter.get("greeting"):
+        one["greeting"] = "Уважаемые коллеги!"
+
+    contract = recipient.get("contract") or ""
+    one["contract"] = contract
+
+    # преамбулу собираем заново: в ней название организации и договор
+    if head.intro:
+        one["intro"] = fill_intro(head.intro, {
+            "recipient_org": one["recipient_org"],
+            "own_org": head.name or (own_org or ""),
+            "contract": contract,
+            "object": head.object,
+        })
+    return one
+
+
+def build_batch(conn, letter: dict, recipients: list[dict], head: Letterhead,
+                own_org: str | None = None, folder: str = "") -> list[tuple]:
+    """Собрать по письму на каждого адресата. Возвращает [(имя, байты)]."""
+    if not recipients:
+        return []
+
+    numbers = next_numbers(conn, head.number_prefix, folder, len(recipients))
+    made = []
+    used: set[str] = set()
+    for recipient, number in zip(recipients, numbers):
+        one = letter_for(recipient, letter, number, head, own_org)
+        name = file_name(one)
+        # имена могут совпасть, если у двух адресатов одна организация
+        if name in used:
+            stem, _, suffix = name.rpartition(".")
+            index = 2
+            while f"{stem} ({index}).{suffix}" in used:
+                index += 1
+            name = f"{stem} ({index}).{suffix}"
+        used.add(name)
+        made.append((name, render(one, head)))
+    return made
+
+
+def pack(files: list[tuple]) -> bytes:
+    """Сложить письма в один архив: по файлу на адресата."""
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, blob in files:
+            archive.writestr(name, blob)
+    return buffer.getvalue()

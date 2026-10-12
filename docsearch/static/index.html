@@ -65,6 +65,9 @@
 
   section { flex: 1; min-width: 0; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip-x { border: none; background: none; cursor: pointer; padding: 0 0 0 6px;
+            color: var(--accent); font-size: 15px; line-height: 1; }
+  .chip-x:hover { color: #a0342c; background: none; }
   .chip {
     background: var(--accent-soft); border: 1px solid #bcd4e8; color: var(--accent);
     border-radius: 20px; padding: 4px 10px; font-size: 13px;
@@ -104,6 +107,28 @@
   .card-form textarea:focus,
   .card-form input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
   .card-form .row { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+  /* Поле поиска по базе отличается от поля ручного ввода: лупа, рамка
+     цветом и подложка. Иначе непонятно, где ищут, а где печатают. */
+  .search-field {
+    background-color: var(--accent-soft) !important;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231b5e9e' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-4-4'/%3E%3C/svg%3E") !important;
+    background-size: 17px 17px !important;
+    background-repeat: no-repeat !important;
+    background-position: 10px center !important;
+    padding-left: 34px !important;
+    border-color: var(--accent) !important;
+  }
+  .search-field::placeholder { color: #5b7fa3; }
+  .field-note { grid-column: 1 / -1; color: var(--muted); font-size: 12px;
+                margin: -4px 0 6px; }
+  .hand-divider {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+    color: var(--muted); font-size: 12px; text-transform: uppercase;
+    letter-spacing: .04em; margin: 8px 0 2px;
+  }
+  .hand-divider::before, .hand-divider::after {
+    content: ""; flex: 1; height: 1px; background: var(--line);
+  }
   .combo-wrap { position: relative; display: block; }
   .combo {
     display: none; position: absolute; z-index: 5; left: 0; right: 0; top: 100%;
@@ -136,7 +161,8 @@
 <header>
   <div class="bar">
     <h1>Архив документов <span id="total"></span></h1>
-    <input id="q" type="search" placeholder="Например: акт передачи документации фасад строй"
+    <input id="q" type="search" class="search-field"
+           placeholder="Поиск по архиву — например: акт передачи документации фасад строй"
            autocomplete="off" autofocus>
     <button class="primary" id="go">Найти</button>
     <button id="reset">Сбросить</button>
@@ -170,11 +196,20 @@
     <label for="l-reference">На №</label><input id="l-reference" placeholder="ссылка на входящее, если есть">
     <label for="l-recipient">Найти адресата</label>
     <span class="combo-wrap">
-      <input id="l-recipient" autocomplete="off"
-             placeholder="фамилия, имя или организация — поля ниже заполнятся сами">
+      <input id="l-recipient" autocomplete="off" class="search-field"
+             placeholder="фамилия, имя или организация">
       <ul id="combo" class="combo"></ul>
       <span id="recipient-hint" class="hint-inline"></span>
     </span>
+    <div class="field-note">Ищет по прошлым письмам. Выберите — поля ниже
+      заполнятся сами.</div>
+    <div class="chips" id="recipient-list"></div>
+    <div class="row">
+      <button id="add-recipient" type="button">Добавить в список</button>
+      <button id="add-all-recipients" type="button">Добавить всех</button>
+      <button id="clear-recipients" type="button">Очистить список</button>
+    </div>
+    <div class="hand-divider">заполняется вручную</div>
     <label for="l-recipient-position">Должность</label><input id="l-recipient-position" placeholder="Генеральному директору">
     <label for="l-recipient-org">Организация</label><input id="l-recipient-org">
     <label for="l-recipient-person">Фамилия и инициалы</label><input id="l-recipient-person" placeholder="Вороновой М. А.">
@@ -537,6 +572,8 @@ async function openLetter() {
     document.getElementById(id).value = "";
   }
   document.getElementById("recipient-hint").textContent = "";
+  chosenRecipients = [];
+  renderRecipients();
   document.getElementById("l-intro").dataset.touched = "";
   const plain = document.querySelector('input[name="body-format"][value="text"]');
   if (plain) plain.checked = true;
@@ -572,6 +609,10 @@ async function buildLetter() {
   }
   const chosenFormat = document.querySelector('input[name="body-format"]:checked');
   body.body_format = chosenFormat ? chosenFormat.value : "text";
+  if (chosenRecipients.length) {
+    await buildBatch(body);
+    return;
+  }
   if (!body.recipient_org) {
     document.getElementById("letter-status").textContent = "Укажите, кому письмо";
     return;
@@ -730,6 +771,100 @@ setupCombo();
 
 document.getElementById("new-letter").onclick = openLetter;
 document.getElementById("letter-build").onclick = buildLetter;
+
+// ------------------------------------------------- рассылка нескольким сразу
+
+let chosenRecipients = [];
+
+function recipientKey(contact) {
+  return (contact.org || "") + "|" + (contact.person || "");
+}
+
+function plural(n, one, few, many) {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+function renderRecipients() {
+  const box = document.getElementById("recipient-list");
+  box.innerHTML = chosenRecipients.map((contact, i) => `
+    <span class="chip">${escapeHtml(
+      [contact.person, contact.org].filter(Boolean).join(", "))}
+      <button type="button" class="chip-x" onclick="dropRecipient(${i})"
+              title="убрать">×</button></span>`).join("");
+  const build = document.getElementById("letter-build");
+  build.textContent = chosenRecipients.length
+    ? `Сформировать ${chosenRecipients.length} ` +
+      plural(chosenRecipients.length, "письмо", "письма", "писем")
+    : "Сформировать .docx";
+}
+
+function dropRecipient(index) {
+  chosenRecipients.splice(index, 1);
+  renderRecipients();
+}
+
+function addRecipient(contact) {
+  if (!contact || !contact.org) return;
+  const key = recipientKey(contact);
+  if (chosenRecipients.some(c => recipientKey(c) === key)) return;
+  chosenRecipients.push(contact);
+  renderRecipients();
+}
+
+// Из полей ниже тоже можно добавить: адресата может не быть в справочнике
+function currentRecipientFromFields() {
+  const org = document.getElementById("l-recipient-org").value.trim();
+  if (!org) return null;
+  return {
+    org,
+    person: document.getElementById("l-recipient-person").value.trim(),
+    position: document.getElementById("l-recipient-position").value.trim(),
+    contract: document.getElementById("l-contract").value.trim(),
+    greeting: document.getElementById("l-greeting").value.trim(),
+  };
+}
+
+async function buildBatch(body) {
+  body.recipients = chosenRecipients;
+  const status = document.getElementById("letter-status");
+  status.textContent = `Собираю ${chosenRecipients.length} ` +
+    plural(chosenRecipients.length, "письмо", "письма", "писем") + "…";
+  const response = await fetch("/api/letter/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    status.textContent = "Не удалось: " + (await response.text()).slice(0, 200);
+    return;
+  }
+  const blob = await response.blob();
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = decodeURIComponent(
+    (response.headers.get("Content-Disposition") || "").split("''")[1] || "Рассылка.zip");
+  link.click();
+  URL.revokeObjectURL(link.href);
+  status.innerHTML = '<span class="edited">Готово, ' + chosenRecipients.length
+    + " " + plural(chosenRecipients.length, "письмо", "письма", "писем")
+    + " в архиве</span>";
+}
+
+document.getElementById("add-recipient").onclick = () => {
+  addRecipient(currentRecipientFromFields());
+};
+document.getElementById("add-all-recipients").onclick = () => {
+  if (!knownRecipients.length) return;
+  if (!confirm(`Добавить всех из справочника — ${knownRecipients.length}?`)) return;
+  knownRecipients.forEach(addRecipient);
+};
+document.getElementById("clear-recipients").onclick = () => {
+  chosenRecipients = [];
+  renderRecipients();
+};
 
 document.getElementById("card-save").onclick = saveCard;
 document.getElementById("card-auto").onclick = resetCard;
