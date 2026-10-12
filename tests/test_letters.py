@@ -1013,3 +1013,43 @@ def test_letterhead_block_stops_at_the_table(tmp_path: Path):
     module = _load_template_tool()
     heads = module.letterhead_paragraphs(docx.Document(str(path)))
     assert [p.text for p in heads] == ["ООО «Тест»"]
+
+
+def test_stray_spaces_in_letterhead_are_removed(tmp_path: Path):
+    """Текст в бланке двигали пробелами: при центрировании они сдвигают строку."""
+    import docx
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    path = tmp_path / "бланк.docx"
+    document = docx.Document()
+    for text in ("ООО «ФБ-СТРОЙ»",
+                 " " * 60 + "Юридический адрес:",
+                 " " * 8 + "117246, г.Москва",
+                 "info@fbstroy.ru   "):
+        paragraph = document.add_paragraph(text)
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document.add_table(rows=1, cols=2)
+    document.save(str(path))
+
+    module = _load_template_tool()
+    fixed = docx.Document(str(path))
+    report = module.align_letterhead(fixed)
+    assert any("пробелы" in line for line in report)
+    for paragraph in fixed.paragraphs[:4]:
+        assert paragraph.text == paragraph.text.strip()
+
+
+def test_spaces_inside_the_line_are_kept(tmp_path: Path):
+    """Убираем только края: внутри строки пробелы разделяют реквизиты."""
+    import docx
+
+    path = tmp_path / "бланк.docx"
+    document = docx.Document()
+    document.add_paragraph("  ОГРН 113 ИНН 502 КПП 772  ")
+    document.add_table(rows=1, cols=2)
+    document.save(str(path))
+
+    module = _load_template_tool()
+    fixed = docx.Document(str(path))
+    module.align_letterhead(fixed)
+    assert fixed.paragraphs[0].text == "ОГРН 113 ИНН 502 КПП 772"

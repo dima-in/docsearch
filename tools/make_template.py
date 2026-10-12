@@ -95,6 +95,43 @@ def letterhead_paragraphs(document):
     return result
 
 
+EDGE_SPACE = " " + chr(0xa0) + chr(9)
+
+
+def strip_edge_spaces(paragraph) -> bool:
+    """Убрать пробелы по краям абзаца.
+
+    В исходном бланке текст двигали пробелами: в одной строке их шестьдесят
+    в начале, в другой восемь. При выравнивании по центру такие пробелы
+    считаются частью строки и сдвигают её — реквизиты встают вразнобой.
+    """
+    runs = paragraph.runs
+    if not runs:
+        return False
+    changed = False
+
+    for run in runs:
+        if not run.text:
+            continue
+        stripped = run.text.lstrip(EDGE_SPACE)
+        if stripped != run.text:
+            run.text = stripped
+            changed = True
+        if stripped:
+            break
+
+    for run in reversed(runs):
+        if not run.text:
+            continue
+        stripped = run.text.rstrip(EDGE_SPACE)
+        if stripped != run.text:
+            run.text = stripped
+            changed = True
+        if stripped:
+            break
+    return changed
+
+
 def align_letterhead(document) -> list[str]:
     """Выровнять отступы в шапке по одному значению.
 
@@ -109,10 +146,15 @@ def align_letterhead(document) -> list[str]:
     if not paragraphs:
         return []
 
+    report = []
+    spaced = sum(1 for p in paragraphs if strip_edge_spaces(p))
+    if spaced:
+        report.append(f"убраны пробелы по краям строк шапки: {spaced}")
+
     indents = [p.paragraph_format.left_indent for p in paragraphs]
     known = [int(value) for value in indents if value is not None]
     if not known:
-        return []
+        return report
 
     common = Counter(known).most_common(1)[0][0]
     from docx.shared import Emu
@@ -125,9 +167,10 @@ def align_letterhead(document) -> list[str]:
             paragraph.paragraph_format.right_indent = None
             changed += 1
 
-    if not changed:
-        return []
-    return [f"выровнены отступы в шапке: {changed} строк(и) по {Emu(common).cm:.2f} см"]
+    if changed:
+        report.append(f"выровнены отступы в шапке: {changed} строк(и)"
+                      f" по {Emu(common).cm:.2f} см")
+    return report
 
 
 def build(source: str, target: str) -> list[str]:
