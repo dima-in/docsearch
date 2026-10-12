@@ -83,7 +83,7 @@ def test_docx_contains_the_fields():
         xml = archive.read("word/document.xml").decode("utf-8")
     for expected in ("РТП-176", "ООО «Маренго»", "Белякову А. В.",
                      "Нарушение сроков", "Просим устранить замечания.",
-                     "Начальник ПТО", "6 октября 2026 г.", "РТП-145"):
+                     "Начальник ПТО", "06.10.2026 г.", "РТП-145"):
         assert expected in xml, expected
 
 
@@ -214,7 +214,7 @@ def test_template_is_filled(tmp_path: Path):
         "body": "Первый абзац.",
     }, head)
     lines = read_all(blob)
-    assert "Исх. РТП-1336 от 7 октября 2026 г." in lines
+    assert "Исх. РТП-1336 от 07.10.2026 г." in lines
     assert "ООО «Мосренстрой-6»" in lines
     assert "Тема: «Ответ на УКМ-300»" in lines
     assert "Первый абзац." in lines
@@ -1053,3 +1053,15 @@ def test_spaces_inside_the_line_are_kept(tmp_path: Path):
     fixed = docx.Document(str(path))
     module.align_letterhead(fixed)
     assert fixed.paragraphs[0].text == "ОГРН 113 ИНН 502 КПП 772"
+
+
+def test_date_in_the_number_line_is_numeric():
+    """В бланке дата цифрами: словами строка не влезает в ячейку."""
+    assert letters.short_date("2026-10-12") == "12.10.2026 г."
+    assert letters.short_date("2026-01-05") == "05.01.2026 г."
+    assert letters.short_date("мусор").endswith("г.")
+
+
+def test_long_date_still_available():
+    """Словесная форма нужна там, где место не ограничено."""
+    assert letters.ru_date("2024-03-19") == "19 марта 2024 г."

@@ -211,6 +211,22 @@ def known_recipients(conn: sqlite3.Connection, limit: int = 100) -> list[str]:
     return [r["counterparty"] for r in rows]
 
 
+def short_date(value: str | None = None) -> str:
+    """Дата цифрами: «12.10.2026 г.».
+
+    Так она написана в бланке, и так короче: в ячейке с номером строка
+    словами не помещается и «г.» уезжает на вторую строку.
+    """
+    today = date.today()
+    if value:
+        try:
+            year, month, day = (int(part) for part in value.split("-"))
+            today = date(year, month, day)
+        except (ValueError, TypeError):
+            pass
+    return f"{today.day:02d}.{today.month:02d}.{today.year} г."
+
+
 def ru_date(value: str | None = None) -> str:
     """ГГГГ-ММ-ДД -> «19 марта 2024 г.»"""
     today = date.today()
@@ -258,7 +274,7 @@ def build_docx(letter: dict, head: Letterhead) -> bytes:
     number_line = []
     if letter.get("number"):
         number_line.append(f"Исх. № {letter['number']}")
-    number_line.append(f"от {ru_date(letter.get('date'))}")
+    number_line.append(f"от {short_date(letter.get('date'))}")
     paragraph("   ".join(number_line), space_after=0)
     if letter.get("reference"):
         paragraph(f"На № {letter['reference']}", space_after=12)
@@ -483,7 +499,7 @@ def render_template(template_path: str, letter: dict, head: Letterhead) -> bytes
     document = docx.Document(template_path)
     context = dict(letter)
     context.setdefault("greeting", "Уважаемые коллеги!")
-    context["date"] = ru_date(letter.get("date"))
+    context["date"] = short_date(letter.get("date"))
     context.setdefault("signer_position", head.signer_position)
     context.setdefault("signer_name", head.signer_name)
     for key in ("signer_position", "signer_name"):
