@@ -150,6 +150,8 @@
   .edited { background: #eaf7ec; color: #1c6b2c; border-radius: 4px; padding: 1px 7px; font-size: 12px; }
   .notice { background: #fff8e1; border: 1px solid #f0dda0; border-radius: 8px;
             padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
+  .worker { font-size: 13px; color: #6b7785; padding: 0 20px 8px; display: none; }
+  .worker b { font-weight: 600; color: #35414d; }
   dialog pre {
     margin: 0; padding: 18px 24px; white-space: pre-wrap; font: 14px/1.6 "Segoe UI", sans-serif;
     overflow-y: auto; max-height: 65vh;
@@ -170,6 +172,7 @@
     <button id="new-letter" class="primary">Новое письмо</button>
     <button id="refresh" title="Обойти папку и добавить появившиеся файлы">Проверить папку</button>
   </div>
+  <div class="worker" id="worker" title="Сервер делает это сам, закрывать страницу не нужно"></div>
 </header>
 
 <main>
@@ -495,7 +498,7 @@ async function refreshArchive() {
       ? `Проверено ${files} за ${r.seconds} с: ${parts.join(", ")}.`
       : `Проверено ${files} за ${r.seconds} с — изменений нет.`);
     if (r.added) showRecent();
-    await processPending(r.pending);
+    pollWorker();
   } catch (error) {
     notice("Не удалось обойти папку: " + error.message);
   } finally {
@@ -505,39 +508,37 @@ async function refreshArchive() {
 }
 
 // Сканы и старые .doc текста при обходе не получают: их содержимое
-// достаётся отдельно и подолгу. Доделываем порциями, чтобы запрос не висел.
-async function processPending(pending) {
-  if (!pending || !pending.total) return;
-  const box = document.getElementById("notice");
-  const before = box.textContent;
-  let left = pending.total;
-  let handled = 0;
-
-  while (left > 0) {
-    box.textContent = `${before} Осталось без текста: ${left}` +
-      ` (сканов ${pending.ocr}, старых .doc ${pending.office}). Обрабатываю…`;
-    const response = await fetch("/api/process", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ office: 20, ocr: 5 }),
-    });
-    if (!response.ok) break;
-    const r = await response.json();
-    handled += r.office.done + r.ocr.done;
-    if (r.errors && r.errors.length) {
-      notice(`${before} Обработка остановлена: ${r.errors[0]}`);
-      return;
+// достаётся отдельно и подолгу. Этим занят сам сервер — страница только
+// показывает, на чём он сейчас, и её можно закрыть.
+async function pollWorker() {
+  const box = document.getElementById("worker");
+  try {
+    const response = await fetch("/api/status");
+    if (!response.ok) throw new Error();
+    const w = await response.json();
+    const left = w.pending || {};
+    const parts = [];
+    if (w.state && w.state !== "ждёт") parts.push(`<b>${esc(w.state)}</b>`);
+    if (left.total) {
+      const bits = [];
+      if (left.office) bits.push(`старых .doc ${left.office}`);
+      if (left.ocr) bits.push(`сканов ${left.ocr}`);
+      parts.push(`осталось без текста ${left.total} (${bits.join(", ")})`);
     }
-    if (!r.office.done && !r.ocr.done && !r.office.failed && !r.ocr.failed) break;
-    pending = r.pending;
-    if (pending.total >= left) break;      // не сдвинулось — не зацикливаемся
-    left = pending.total;
+    if (w.read) {
+      parts.push(`дочитано ${w.read} ` +
+        plural(w.read, "документ", "документа", "документов"));
+    }
+    // в тексте ошибки лежит имя файла из архива — в разметку его нельзя
+    if (w.errors && w.errors.length) parts.push(esc(w.errors[0]));
+    if (w.last_walk) {
+      parts.unshift(`папка проверена в ${w.last_walk.slice(11, 16)}`);
+    }
+    box.innerHTML = parts.join(" · ");
+    box.style.display = parts.length ? "block" : "none";
+  } catch (error) {
+    box.style.display = "none";
   }
-  notice(handled
-    ? `${before} Дочитано ${handled} ` +
-      plural(handled, "документ", "документа", "документов") + "." +
-      (left ? ` Осталось ${left}.` : " Текст есть у всех.")
-    : before);
 }
 
 function notice(text) {
@@ -817,6 +818,12 @@ function recipientKey(contact) {
   return (contact.org || "") + "|" + (contact.person || "");
 }
 
+function esc(text) {
+  const box = document.createElement("span");
+  box.textContent = text;
+  return box.innerHTML;
+}
+
 function plural(n, one, few, many) {
   const mod10 = n % 10, mod100 = n % 100;
   if (mod10 === 1 && mod100 !== 11) return one;
@@ -906,6 +913,8 @@ document.getElementById("clear-recipients").onclick = () => {
 document.getElementById("card-save").onclick = saveCard;
 document.getElementById("card-auto").onclick = resetCard;
 document.getElementById("refresh").onclick = refreshArchive;
+pollWorker();
+setInterval(pollWorker, 15000);
 document.getElementById("recent").onclick = showRecent;
 
 function copyPath(button, path) {

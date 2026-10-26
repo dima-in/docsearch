@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
@@ -19,7 +20,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response)
 
-from . import db, indexer, letters, pipeline
+from . import db, indexer, letters, pipeline, worker as worker_mod
 from . import search as search_mod
 from .config import Config
 
@@ -38,8 +39,18 @@ INLINE_TYPES = {
 
 
 def create_app(cfg: Config) -> FastAPI:
+    # обход по расписанию и дочитывание остатка идут сами, без человека
+    worker = worker_mod.Worker(cfg)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        worker.start()
+        yield
+        worker.stop()
+
     app = FastAPI(title="Поиск по архиву документов", docs_url=None,
-                  redoc_url=None)
+                  redoc_url=None, lifespan=lifespan)
+    app.state.worker = worker
 
     def connect() -> sqlite3.Connection:
         # каждое обращение — своя связь: sqlite не любит хождения между потоками
@@ -169,11 +180,14 @@ def create_app(cfg: Config) -> FastAPI:
         """
         conn = connect()
         try:
-            stats = indexer.run(conn, cfg)
-            if stats.added or stats.updated or stats.removed:
-                # новые письма дают новых адресатов — справочник устаревает
-                letters.rebuild_contacts(conn, own_org=cfg.own_org,
-                                         own_people=cfg.own_people)
+            # фоновый поток может в это время читать сканы: пишет в базу
+            # кто-то один
+            with worker.db_lock:
+                stats = indexer.run(conn, cfg)
+                if stats.added or stats.updated or stats.removed:
+                    # новые письма дают новых адресатов, справочник устаревает
+                    letters.rebuild_contacts(conn, own_org=cfg.own_org,
+                                             own_people=cfg.own_people)
             return JSONResponse({
                 "scanned": stats.scanned,
                 "added": stats.added,
@@ -186,6 +200,11 @@ def create_app(cfg: Config) -> FastAPI:
             raise HTTPException(503, f"Папка недоступна: {exc}")
         finally:
             conn.close()
+
+    @app.get("/api/status")
+    def api_status() -> JSONResponse:
+        """Чем сервер занят сам по себе: обход, чтение .doc, распознавание."""
+        return JSONResponse(worker.status())
 
     @app.get("/api/pending")
     def api_pending() -> JSONResponse:
@@ -214,7 +233,8 @@ def create_app(cfg: Config) -> FastAPI:
             for name, run, limit in (("office", pipeline.process_office, office_limit),
                                      ("ocr", pipeline.process_ocr, ocr_limit)):
                 try:
-                    report[name] = run(conn, cfg, limit)
+                    with worker.db_lock:
+                        report[name] = run(conn, cfg, limit)
                 except Exception as exc:
                     # Office или Tesseract может не стоять — это не повод
                     # ронять всю обработку

@@ -47,6 +47,7 @@ class Config:
     section_rules: dict = field(default_factory=dict)
     letterhead: dict = field(default_factory=dict)
     ocr: dict = field(default_factory=dict)
+    serve: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # служебные папки исключаются всегда, как бы ни собрали Config
@@ -129,5 +130,6 @@ def load(path: str | os.PathLike | None = None) -> Config:
         section_rules=idx.get("sections") or {},
         letterhead=_with_template(raw.get("letterhead") or {}, resolve),
         ocr=raw.get("ocr") or {},
+        serve=raw.get("serve") or {},
         exclude_globs=list(idx.get("exclude_globs", [])),
     )
