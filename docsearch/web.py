@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response)
 
-from . import db, indexer, letters
+from . import db, indexer, letters, pipeline
 from . import search as search_mod
 from .config import Config
 
@@ -170,16 +170,61 @@ def create_app(cfg: Config) -> FastAPI:
         conn = connect()
         try:
             stats = indexer.run(conn, cfg)
+            if stats.added or stats.updated or stats.removed:
+                # новые письма дают новых адресатов — справочник устаревает
+                letters.rebuild_contacts(conn, own_org=cfg.own_org,
+                                         own_people=cfg.own_people)
             return JSONResponse({
                 "scanned": stats.scanned,
                 "added": stats.added,
                 "updated": stats.updated,
                 "removed": stats.removed,
-                "needs_ocr": stats.needs_ocr,
                 "seconds": round(stats.seconds),
+                "pending": pipeline.pending(conn),
             })
         except FileNotFoundError as exc:
             raise HTTPException(503, f"Папка недоступна: {exc}")
+        finally:
+            conn.close()
+
+    @app.get("/api/pending")
+    def api_pending() -> JSONResponse:
+        """Сколько документов ещё без текста: сканы и старые форматы."""
+        conn = connect()
+        try:
+            return JSONResponse(pipeline.pending(conn))
+        finally:
+            conn.close()
+
+    @app.post("/api/process")
+    def api_process(payload: dict = Body(default={})) -> JSONResponse:
+        """Обработать порцию: сначала старые форматы, потом сканы.
+
+        Порциями, а не целиком: распознавание идёт минутами, и держать
+        запрос открытым всё это время нельзя. Браузер зовёт снова, пока
+        остаток не кончится.
+        """
+        conn = connect()
+        try:
+            office_limit = int(payload.get("office") or 20)
+            ocr_limit = int(payload.get("ocr") or 5)
+            report = {"office": {"done": 0, "failed": 0},
+                      "ocr": {"done": 0, "failed": 0}, "errors": []}
+
+            for name, run, limit in (("office", pipeline.process_office, office_limit),
+                                     ("ocr", pipeline.process_ocr, ocr_limit)):
+                try:
+                    report[name] = run(conn, cfg, limit)
+                except Exception as exc:
+                    # Office или Tesseract может не стоять — это не повод
+                    # ронять всю обработку
+                    report["errors"].append(f"{type(exc).__name__}: {exc}"[:200])
+
+            if report["office"]["done"] or report["ocr"]["done"]:
+                letters.rebuild_contacts(conn, own_org=cfg.own_org,
+                                         own_people=cfg.own_people)
+            report["pending"] = pipeline.pending(conn)
+            return JSONResponse(report)
         finally:
             conn.close()
 

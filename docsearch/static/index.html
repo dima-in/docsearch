@@ -490,17 +490,54 @@ async function refreshArchive() {
     if (r.added) parts.push(`новых ${r.added}`);
     if (r.updated) parts.push(`обновлено ${r.updated}`);
     if (r.removed) parts.push(`удалено ${r.removed}`);
+    const files = `${r.scanned} ${plural(r.scanned, "файл", "файла", "файлов")}`;
     notice(parts.length
-      ? `Проверено ${r.scanned} файлов за ${r.seconds} с: ${parts.join(", ")}.
-         Нажмите «Новые», чтобы проверить их атрибуты.`
-      : `Проверено ${r.scanned} файлов за ${r.seconds} с — изменений нет.`);
+      ? `Проверено ${files} за ${r.seconds} с: ${parts.join(", ")}.`
+      : `Проверено ${files} за ${r.seconds} с — изменений нет.`);
     if (r.added) showRecent();
+    await processPending(r.pending);
   } catch (error) {
     notice("Не удалось обойти папку: " + error.message);
   } finally {
     button.disabled = false;
     button.textContent = was;
   }
+}
+
+// Сканы и старые .doc текста при обходе не получают: их содержимое
+// достаётся отдельно и подолгу. Доделываем порциями, чтобы запрос не висел.
+async function processPending(pending) {
+  if (!pending || !pending.total) return;
+  const box = document.getElementById("notice");
+  const before = box.textContent;
+  let left = pending.total;
+  let handled = 0;
+
+  while (left > 0) {
+    box.textContent = `${before} Осталось без текста: ${left}` +
+      ` (сканов ${pending.ocr}, старых .doc ${pending.office}). Обрабатываю…`;
+    const response = await fetch("/api/process", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ office: 20, ocr: 5 }),
+    });
+    if (!response.ok) break;
+    const r = await response.json();
+    handled += r.office.done + r.ocr.done;
+    if (r.errors && r.errors.length) {
+      notice(`${before} Обработка остановлена: ${r.errors[0]}`);
+      return;
+    }
+    if (!r.office.done && !r.ocr.done && !r.office.failed && !r.ocr.failed) break;
+    pending = r.pending;
+    if (pending.total >= left) break;      // не сдвинулось — не зацикливаемся
+    left = pending.total;
+  }
+  notice(handled
+    ? `${before} Дочитано ${handled} ` +
+      plural(handled, "документ", "документа", "документов") + "." +
+      (left ? ` Осталось ${left}.` : " Текст есть у всех.")
+    : before);
 }
 
 function notice(text) {

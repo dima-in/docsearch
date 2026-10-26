@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import db, extract, homoglyph, letters, meta, morph, ocr
-from . import office, scaffold, shell
+from . import office, pipeline, scaffold, shell
 from . import sniff, textnorm
 from . import search as search_mod
 from . import indexer
@@ -434,18 +434,11 @@ def cmd_ocr(args) -> int:
             if result.error:
                 db.fail_ocr(conn, row["id"], result.error)
                 failed += 1
+            elif pipeline.store_ocr_text(conn, cfg, row, result.text):
+                done += 1
             else:
-                text = homoglyph.fix(textnorm.normalize(result.text))
-                text = text[: cfg.max_text_chars]
-                if text:
-                    searchable = "\n".join([row["name"], row["rel_path"], text])
-                    db.save_ocr(conn, row["id"], row["name"], text,
-                                morph.lemmatize(searchable))
-                    done += 1
-                else:
-                    # распозналось в пустоту: чистый бланк или брак скана
-                    db.fail_ocr(conn, row["id"], "распознано пусто")
-                    empty += 1
+                # распозналось в пустоту: чистый бланк или брак скана
+                empty += 1
 
             seen = done + failed + empty
             if seen % 10 == 0:
@@ -769,22 +762,12 @@ def cmd_legacy(args) -> int:
                         failed += 1
                         continue
 
-                    text = textnorm.normalize(
-                        office.extract_converted(target))[: cfg.max_text_chars]
+                    raw = office.extract_converted(target)
                     target.unlink(missing_ok=True)
-                    if not text:
-                        db.fail_office(conn, row["id"], "текста в файле нет")
+                    if pipeline.store_office_text(conn, cfg, row, raw, overrides):
+                        done += 1
+                    else:
                         empty += 1
-                        continue
-
-                    attrs = meta.guess(Path(row["path"]), row["rel_path"], text,
-                                       cfg.own_org, cfg.section_rules)
-                    attrs.pop("organizations", None)
-                    attrs = db.apply_override(attrs, overrides.get(row["path"], {}))
-                    searchable = chr(10).join([row["name"], row["rel_path"], text])
-                    db.save_office(conn, row["id"], row["name"], text,
-                                   morph.lemmatize(searchable), attrs)
-                    done += 1
 
             conn.commit()
             if _interactive():

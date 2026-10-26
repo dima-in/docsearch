@@ -119,3 +119,57 @@ def test_recent_marks_checked_documents(env):
     client.patch(f"/api/doc/{doc_id}", json={"note": "проверено"})
     recent = client.get("/api/recent").json()["results"]
     assert recent[0]["edited"] == 1
+
+
+def test_refresh_reports_what_still_has_no_text(env):
+    """Кнопка «Проверить папку» должна честно говорить про сканы и .doc."""
+    conn, cfg, doc_id, tmp_path = env
+    client = TestClient(create_app(cfg))
+    (tmp_path / "arc" / "Письма" / "Исх 300.doc").write_bytes(b"\xd0\xcf\x11\xe0")
+
+    result = client.post("/api/refresh").json()
+    assert result["added"] == 1
+    assert result["pending"]["office"] == 1
+    assert result["pending"]["total"] >= 1
+
+
+def test_pending_endpoint(env):
+    conn, cfg, doc_id, tmp_path = env
+    client = TestClient(create_app(cfg))
+    data = client.get("/api/pending").json()
+    assert set(data) == {"ocr", "office", "total"}
+
+
+def test_process_survives_missing_office(env, monkeypatch):
+    """Office или Tesseract может не стоять — обработка не должна падать."""
+    from docsearch import pipeline
+
+    conn, cfg, doc_id, tmp_path = env
+    (tmp_path / "arc" / "Письма" / "Исх 301.doc").write_bytes(b"\xd0\xcf\x11\xe0")
+    client = TestClient(create_app(cfg))
+    client.post("/api/refresh")
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("Microsoft Word не запускается")
+
+    monkeypatch.setattr(pipeline, "process_office", unavailable)
+    monkeypatch.setattr(pipeline, "process_ocr", unavailable)
+
+    result = client.post("/api/process").json()
+    assert result["errors"]
+    assert "Word" in result["errors"][0]
+    assert result["office"]["done"] == 0
+
+
+def test_refresh_updates_the_directory(env):
+    """Новое письмо даёт нового адресата — справочник не должен устаревать."""
+    conn, cfg, doc_id, tmp_path = env
+    client = TestClient(create_app(cfg))
+    (tmp_path / "arc" / "Письма" / "Исх 302.txt").write_text(
+        chr(10).join(["Генеральному директору", "ООО «Высота»",
+                      "Иванову И.И.", "Уважаемый Иван Иванович!"]),
+        encoding="utf-8")
+
+    client.post("/api/refresh")
+    orgs = [r["org"] for r in db.contacts(conn)]
+    assert "ООО «Высота»" in orgs
