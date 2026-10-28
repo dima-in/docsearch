@@ -292,6 +292,32 @@ def cmd_stats(args) -> int:
 
 # ------------------------------------------------------------------- problems
 
+def cmd_dump(args) -> int:
+    """Тексты документов из папки одним файлом — для разбора бланков."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+    try:
+        exts = [e.strip() for e in (args.ext or "").split(",") if e.strip()]
+        result = kinds.dump(conn, args.folder, kind=args.kind, exts=exts,
+                            limit=args.limit, chars=args.chars)
+    finally:
+        conn.close()
+    if not result.written:
+        print(f"Неуспех: в папке «{args.folder}» не нашлось документов с текстом"
+              + (f" вида «{args.kind}»" if args.kind else ""))
+        return 1
+    out = Path(args.out)
+    out.write_text(result.text, encoding="utf-8")
+    size = out.stat().st_size // 1024
+    print(f"Успех: {result.written} док. в {out.resolve()} ({size} КБ)")
+    if result.duplicates:
+        print(f"  повторов пропущено: {result.duplicates}")
+    if result.no_text:
+        print(f"  без текста, не вошли: {result.no_text} — это сканы, которые"
+              " ещё не распознаны")
+    return 0
+
+
 def cmd_kinds(args) -> int:
     """Какие документы лежат в папке — перед тем, как делать шаблоны."""
     cfg = config_mod.load(args.config)
@@ -887,6 +913,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stats", help="что сейчас в индексе")
     s.set_defaults(func=cmd_stats)
+
+    s = sub.add_parser("dump",
+                       help="тексты документов из папки одним файлом")
+    s.add_argument("folder", help="часть названия папки, например Акты")
+    s.add_argument("--kind", help="только этот вид, часть названия: "
+                                  "«акт», «передачи площадки»")
+    s.add_argument("--ext", help="только эти форматы через запятую: .doc,.docx")
+    s.add_argument("-n", "--limit", type=int, help="не больше стольких документов")
+    s.add_argument("--chars", type=int, default=kinds.DUMP_CHARS,
+                   help="сколько знаков брать из каждого документа")
+    s.add_argument("-o", "--out", required=True, help="куда записать")
+    s.set_defaults(func=cmd_dump)
 
     s = sub.add_parser("kinds",
                        help="какие документы лежат в папке: виды и образцы")

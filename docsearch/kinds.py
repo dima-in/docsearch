@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import sqlite3
 from collections import Counter
@@ -204,3 +205,91 @@ def report(kinds: list[Kind], folders: Counter, total: int, folder: str,
         lines.append(f"  …и ещё {len(kinds) - limit} видов, в них {_files(rest)}."
                      " Больше — с флагом -n")
     return "\n".join(lines)
+
+
+# — выгрузка текстов ———————————————————————————————————————————
+
+DUMP_CHARS = 8000           # акт — страница-три; дальше обычно приложения
+RULE = "=" * 72
+
+
+@dataclass
+class Dumped:
+    text: str
+    written: int = 0
+    duplicates: int = 0
+    no_text: int = 0
+    kinds: Counter = field(default_factory=Counter)
+
+
+def _fingerprint(body: str) -> str:
+    """Один и тот же акт часто лежит дважды: в папке и в «Подписанных».
+    Сравниваем текст без пробелов и регистра."""
+    return hashlib.sha1(SPACES.sub("", body).lower().encode("utf-8")).hexdigest()
+
+
+def dump(conn: sqlite3.Connection, folder: str, kind: str | None = None,
+         exts: list[str] | None = None, limit: int | None = None,
+         chars: int = DUMP_CHARS) -> Dumped:
+    """Тексты документов из папки одним файлом — читать подряд и сравнивать.
+
+    Порядок — по виду, внутри вида по дате: так рядом оказываются акты
+    одного бланка, и видно, что в них меняется, а что стоит постоянно.
+    """
+    pattern = f"%{folder.lower()}%"
+    rows = conn.execute(
+        "SELECT d.rel_path, d.name, d.ext, d.doc_date, d.mtime, f.body AS body "
+        "FROM documents d LEFT JOIN doc_fts f ON f.rowid = d.id "
+        "WHERE ru_lower(d.rel_path) LIKE ?",
+        (pattern,),
+    ).fetchall()
+
+    wanted_exts = {e.lower() if e.startswith(".") else f".{e.lower()}"
+                   for e in exts or []}
+    wanted_kind = (kind or "").lower().replace("ё", "е").strip()
+    result = Dumped(text="")
+    picked = []
+    seen: set[str] = set()
+    for row in rows:
+        if wanted_exts and row["ext"].lower() not in wanted_exts:
+            continue
+        body = (row["body"] or "").strip()
+        title = title_from_text(body) or title_from_name(row["name"])
+        if wanted_kind and wanted_kind not in title:
+            continue
+        if not body:
+            result.no_text += 1
+            continue
+        mark = _fingerprint(body)
+        if mark in seen:
+            result.duplicates += 1
+            continue
+        seen.add(mark)
+        when = row["doc_date"] or \
+            datetime.fromtimestamp(row["mtime"]).date().isoformat()
+        picked.append((title, when, row["rel_path"], body))
+
+    picked.sort(key=lambda item: item[:3])
+    if limit:
+        picked = picked[:limit]
+
+    parts = []
+    for title, when, rel_path, body in picked:
+        result.kinds[title] += 1
+        cut = body[:chars]
+        tail = f"\n[… обрезано, всего {len(body)} знаков]" if len(body) > chars else ""
+        parts.append(f"{RULE}\nвид: {title}\nфайл: {rel_path}\nдата: {when}\n"
+                     f"{RULE}\n{cut}{tail}\n")
+    result.written = len(picked)
+
+    head = [f"Папка «{folder}»"
+            + (f", вид «{kind}»" if kind else "")
+            + (f", форматы {', '.join(sorted(wanted_exts))}" if wanted_exts else "")
+            + f": {_files(result.written)}.",
+            f"Повторов пропущено: {result.duplicates}. "
+            f"Без текста (не распознаны): {result.no_text}.",
+            "",
+            "Виды:"]
+    head += [f"  {n:>5}  {t}" for t, n in result.kinds.most_common()]
+    result.text = "\n".join(head) + "\n\n" + "\n".join(parts)
+    return result

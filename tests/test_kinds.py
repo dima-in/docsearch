@@ -108,3 +108,51 @@ def test_certificate_number_leaves_no_crumbs():
     # и когда текста нет — то же по имени файла
     assert kinds.title_from_name("Сертификат соответствия №РОСС "
                                  "RU.32437.04ЛБК0.ОС04.00469 от 30.09.2024.pdf")         == "сертификат соответствия"
+
+
+def test_dump_writes_texts_grouped_and_without_repeats(tmp_path: Path):
+    acts = tmp_path / "arc" / "АКТЫ"
+    (acts / "Подписаные").mkdir(parents=True)
+    site = text("АКТ № {n}", "г. Москва", "передачи строительной площадки",
+                "Подрядчик: ООО «{org}»")
+    (acts / "Акт 1.txt").write_text(site.format(n=1, org="Арктик"), encoding="utf-8")
+    (acts / "Акт 11.txt").write_text(site.format(n=11, org="Дизант"), encoding="utf-8")
+    # тот же акт ещё раз, в подписанных
+    (acts / "Подписаные" / "Акт 11.txt").write_text(
+        site.format(n=11, org="Дизант"), encoding="utf-8")
+    (acts / "Акт 30.txt").write_text(
+        text("АКТ № 30", "об устранении замечаний", "Замечания устранены"),
+        encoding="utf-8")
+
+    cfg = Config(roots=[Root(label="ПТО", path=str(tmp_path / "arc"))],
+                 db=str(tmp_path / "index.db"))
+    conn = db.connect(cfg.db)
+    indexer.run(conn, cfg)
+
+    everything = kinds.dump(conn, "акты")
+    assert everything.written == 3
+    assert everything.duplicates == 1
+    # акты одного бланка идут подряд, между ними чужих нет
+    body = everything.text
+    first, second = sorted((body.index("Арктик"), body.index("Дизант")))
+    assert "устранены" not in body[first:second]
+
+    only_site = kinds.dump(conn, "акты", kind="площадки")
+    conn.close()
+    assert only_site.written == 2
+    assert "устранены" not in only_site.text
+
+
+def test_dump_cuts_long_documents(tmp_path: Path):
+    acts = tmp_path / "arc" / "АКТЫ"
+    acts.mkdir(parents=True)
+    (acts / "Акт 5.txt").write_text(
+        text("АКТ № 5", "приемки фасада", "слово " * 3000), encoding="utf-8")
+    cfg = Config(roots=[Root(label="ПТО", path=str(tmp_path / "arc"))],
+                 db=str(tmp_path / "index.db"))
+    conn = db.connect(cfg.db)
+    indexer.run(conn, cfg)
+    result = kinds.dump(conn, "акты", chars=500)
+    conn.close()
+    assert "обрезано" in result.text
+    assert len(result.text) < 2000
