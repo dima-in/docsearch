@@ -295,3 +295,52 @@ def test_api_without_template_explains(archive):
     response = client.post("/api/act", json={"number": 1, "body": "x"})
     assert response.status_code == 400
     assert "act-template" in response.text
+
+
+# — стороны и своя организация ——————————————————————————————————————
+
+def test_parties_are_put_in_and_blank_when_not_chosen(settings):
+    blob = acts.build({
+        "number": 1, "members": MEMBERS,
+        "body": "представителями [кто передаёт] передаются помещения, "
+                "представителями [кто принимает] выполнена приёмка",
+        "parties": {"кто передаёт": "ООО «Альфа»"},
+    }, settings)[0][1]
+    text = text_of(blob)
+    assert "представителями ООО «Альфа» передаются" in text
+    assert "представителями ООО «___» выполнена" in text
+    assert "[" not in text
+
+
+def test_parties_work_in_a_batch(settings):
+    files = acts.build({
+        "number": 5, "members": MEMBERS, "body": "[кто повредил] повредил {что}",
+        "parties": {"кто повредил": "ООО «Бета»"}, "rows": "лоток" + NL + "кабель",
+    }, settings)
+    assert "ООО «Бета» повредил кабель" in text_of(files[1][1])
+
+
+def test_parties_are_found_in_order_and_once():
+    act = {"body": "[кто передаёт] и [кто принимает], снова [кто передаёт]"}
+    assert acts.parties(act) == ["кто передаёт", "кто принимает"]
+    assert acts.fields(act) == []
+
+
+def test_presets_name_sides_not_our_organization():
+    texts = " ".join(p["text"] for p in acts.default_presets())
+    assert "[кто передаёт]" in texts and "[кто принимает]" in texts
+
+
+def test_short_own_name_gets_its_form_from_past_acts():
+    people = [{"org": "ООО «Бета»"}, {"org": "ООО «Альфа-Строй»"}]
+    assert acts.full_org("Альфа-Строй", people) == "ООО «Альфа-Строй»"
+    assert acts.full_org("ООО «Альфа-Строй»", []) == "ООО «Альфа-Строй»"
+    assert acts.full_org("Гамма", people) == "Гамма"
+
+
+def test_api_draft_gives_own_organization_in_full(archive, settings):
+    conn, cfg = archive
+    cfg.own_org = "Альфа"
+    cfg.acts = {"template": settings.template, "folder": "АКТЫ"}
+    client = TestClient(create_app(cfg))
+    assert client.get("/api/act/draft").json()["organization"] == "ООО «Альфа»"

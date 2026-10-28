@@ -40,6 +40,9 @@ DEFAULT_FOLDER = "АКТЫ"
 # — поля пакета: {шифр}, {КС-2} — в одинарных скобках, чтобы не путать
 # с разметкой шаблона {{number}}
 RE_FIELD = re.compile(r"(?<!\{)\{([^{}\n]{1,40})\}(?!\})")
+# — стороны: [кто передаёт], [кто принимает] — организации, которые в форме
+# выбираются из списка. Сколько разных скобок, столько и списков
+RE_PARTY = re.compile(r"\[([А-ЯЁа-яё][А-ЯЁа-яё -]{1,38})\]")
 
 
 @dataclass
@@ -57,7 +60,7 @@ class ActSettings:
             template=raw.get("template") or "",
             folder=(raw.get("folder") or DEFAULT_FOLDER).strip(),
             organization=organization,
-            presets=list(raw.get("presets") or []) or default_presets(organization),
+            presets=list(raw.get("presets") or []) or default_presets(),
         )
 
     @property
@@ -65,13 +68,13 @@ class ActSettings:
         return bool(self.template) and Path(self.template).exists()
 
 
-def default_presets(organization: str = "") -> list[dict]:
+def default_presets() -> list[dict]:
     """Заготовки текста — по самым частым актам из архива.
 
-    Прочерки — места, которые всё равно придётся вписать. Поля в фигурных
-    скобках — колонки пакета: на каждую строку выйдет отдельный акт.
+    Прочерки — места, которые всё равно придётся вписать. Стороны в
+    квадратных скобках выбираются в форме из списка организаций. Поля в
+    фигурных скобках — колонки пакета: на каждую строку выйдет отдельный акт.
     """
-    ours = organization or "ООО «___»"
     return [
         {"name": "Свободный текст", "text": ""},
         {"name": "Осмотр работ по КС-2 (можно пакетом)",
@@ -81,23 +84,42 @@ def default_presets(organization: str = "") -> list[dict]:
                  "Не представлена исполнительная документация, "
                  "предусмотренная Договором."},
         {"name": "Повреждение работ",
-         "text": "во время производства работ подрядной организацией ООО «___» "
-                 "были повреждены работы, выполненные ООО «___».\n"
+         "text": "во время производства работ подрядной организацией [кто повредил] "
+                 "были повреждены работы, выполненные [чьи работы].\n"
                  "Объём восстановительных работ составляет:\n- ___\n"
                  "Комиссией принято решение: ___"},
         {"name": "Передача помещений под работы",
-         "text": f"представителями {ours} передаются помещения на ___ секции "
+         "text": "представителями [кто передаёт] передаются помещения на ___ секции "
                  "___ этаж для производства работ по ___, представителями "
-                 "ООО «___» выполнена приёмка вышеуказанных помещений.\n"
+                 "[кто принимает] выполнена приёмка вышеуказанных помещений.\n"
                  "Дополнения: ___"},
         {"name": "Демонтаж с сохранением материала",
-         "text": "согласно ___ была демонтирована ___ в объёме ___ тн, "
-                 "в том числе с сохранением материала:\n- ___ – ___ тн"},
+         "text": "согласно ___ силами [кто демонтировал] была демонтирована ___ "
+                 "в объёме ___ тн, в том числе с сохранением материала:\n"
+                 "- ___ – ___ тн"},
         {"name": "Списание",
          "text": "___ имеет износ и дефекты, появившиеся в процессе длительной "
                  "эксплуатации. Ремонт нецелесообразен.\n"
                  "В связи с вышесказанным принято решение о списании и утилизации."},
     ]
+
+
+def full_org(name: str, people: list[dict]) -> str:
+    """Название с формой собственности, как оно пишется в актах.
+
+    В конфиге своя организация часто записана коротко — «ФБ-Строй», а в
+    шапке и тексте акта нужно «ООО «ФБ-Строй»». Форму берём из прошлых
+    актов той же организации; не нашли — оставляем как есть, не гадаем.
+    """
+    name = (name or "").strip()
+    if not name or RE_ORG.fullmatch(name):
+        return name
+    key = letters.org_key(name)
+    for person in people:
+        org = (person.get("org") or "").strip()
+        if letters.org_key(org) == key and RE_ORG.fullmatch(org):
+            return org
+    return name
 
 
 # — член комиссии ———————————————————————————————————————————————
@@ -661,6 +683,23 @@ def file_name(number, subject: str = "") -> str:
 PACKED = ("body", "subject", "appendix", "basis")
 
 
+def parties(act: dict) -> list[str]:
+    """Стороны по порядку появления: на каждую в форме свой список."""
+    found: list[str] = []
+    for key in PACKED:
+        for name in RE_PARTY.findall(act.get(key) or ""):
+            name = name.strip()
+            if name and name not in found:
+                found.append(name)
+    return found
+
+
+def _put_parties(text: str, chosen: dict) -> str:
+    # не выбрали — прочерк, как и в остальных местах, которые вписывают руками
+    return RE_PARTY.sub(lambda m: (chosen.get(m.group(1).strip()) or "").strip()
+                        or "ООО «___»", text or "")
+
+
 def fields(act: dict) -> list[str]:
     """Поля пакета по порядку появления — это и есть колонки таблицы."""
     found: list[str] = []
@@ -691,6 +730,9 @@ def _put(text: str, values: dict) -> str:
 
 def build(act: dict, settings: ActSettings) -> list[tuple[str, bytes]]:
     """Один акт или пакет: по строке на акт, номера подряд."""
+    chosen = act.get("parties") or {}
+    act = {**act, **{key: _put_parties(act.get(key), chosen)
+                     for key in PACKED if act.get(key)}}
     names = fields(act)
     rows = act.get("rows")
     if isinstance(rows, str):

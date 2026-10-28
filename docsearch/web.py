@@ -359,6 +359,7 @@ def create_app(cfg: Config) -> FastAPI:
             number = acts.next_number(conn, settings.folder)
         finally:
             conn.close()
+        organization = acts.full_org(settings.organization, people)
         return JSONResponse({
             "ready": settings.ready,
             "template": settings.template,
@@ -366,7 +367,7 @@ def create_app(cfg: Config) -> FastAPI:
             "number": number,
             "number_after": number - 1 if number > 1 else None,
             "date": date.today().isoformat(),
-            "organization": settings.organization,
+            "organization": organization,
             "people": people,
             "last": last,
             "presets": settings.presets,
@@ -384,6 +385,12 @@ def create_app(cfg: Config) -> FastAPI:
             raise HTTPException(400, "Шаблон акта не настроен: соберите его "
                                      "командой act-template и укажите в "
                                      "конфиге acts.template")
+        conn = connect()
+        try:
+            people, _ = acts.directory(conn, settings.folder, settings.organization)
+        finally:
+            conn.close()
+        settings.organization = acts.full_org(settings.organization, people)
         try:
             files = acts.build(act, settings)
         except ValueError as exc:

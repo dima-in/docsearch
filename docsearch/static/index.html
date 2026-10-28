@@ -168,6 +168,11 @@
   .card-form select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px;
                       font: inherit; width: 100%; background: #fff; }
   .rows-head { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .parties { display: grid; gap: 6px; }
+  .party { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 8px; align-items: center; }
+  .party > span { font-size: 13px; color: var(--muted); }
+  .party > div { display: flex; gap: 6px; min-width: 0; }
+  .party select, .party input { flex: 1; min-width: 0; }
 </style>
 </head>
 <body>
@@ -285,9 +290,12 @@
     <label for="a-body">…в том, что</label>
     <span>
       <textarea id="a-body" rows="7" placeholder="произведен осмотр работ…"></textarea>
-      <span class="hint-inline" style="margin-left:0">Слово в фигурных скобках —
-        {шифр} — это поле пакета: на каждую строку таблицы ниже выйдет отдельный акт.</span>
+      <span class="hint-inline" style="margin-left:0">[кто принимает] в квадратных
+        скобках — сторона: организация выбирается из списка ниже. {шифр} в фигурных —
+        поле пакета: на каждую строку таблицы выйдет отдельный акт.</span>
     </span>
+    <label id="a-parties-label" style="display:none">Стороны</label>
+    <div class="parties" id="a-parties" style="display:none"></div>
     <label for="a-rows" id="a-rows-label" style="display:none">Строки пакета</label>
     <span id="a-rows-box" style="display:none">
       <div class="rows-head" id="a-rows-head"></div>
@@ -988,6 +996,12 @@ let actOrgKey = "";
 let actComboIndex = -1;
 // поле пакета — {шифр} в одинарных скобках; {{…}} — разметка шаблона
 const ACT_FIELD = /(?<!\{)\{([^{}\n]{1,40})\}(?!\})/g;
+// сторона — [кто передаёт]: организация из списка, а не из пакета
+const ACT_PARTY = /\[([А-ЯЁа-яё][А-ЯЁа-яё -]{1,38})\]/g;
+const ACT_MANUAL = "__вручную__";
+let actOrg = "";
+let actParties = {};          // сторона → организация
+let actPartyAuto = new Set(); // стороны, которые выбраны за человека
 
 function orgKey(name) {
   return (name || "").toLowerCase()
@@ -1004,7 +1018,10 @@ async function openAct() {
   actPeople = draft.people || [];
   actLast = draft.last;
   actPresets = draft.presets || [];
-  actOrgKey = orgKey(draft.organization);
+  actOrg = draft.organization || "";
+  actOrgKey = orgKey(actOrg);
+  actParties = {};
+  actPartyAuto = new Set();
 
   const setup = document.getElementById("act-setup");
   setup.style.display = draft.ready ? "none" : "block";
@@ -1040,6 +1057,7 @@ async function openAct() {
 
 function renderMembers() {
   const box = document.getElementById("a-members");
+  renderParties();
   if (!actMembers.length) {
     box.innerHTML = '<div class="members-empty">Комиссия пуста — найдите людей ' +
       "выше или возьмите состав прошлого акта.</div>";
@@ -1062,6 +1080,7 @@ function renderMembers() {
         const value = input.type === "checkbox" ? input.checked : input.value;
         actMembers[i][input.dataset.k] = value;
         if (input.type === "checkbox") row.classList.toggle("absent", value);
+        if (input.dataset.k === "org") renderParties();
       };
     });
     row.querySelector("[data-drop]").onclick = () => {
@@ -1158,6 +1177,101 @@ function actFieldNames() {
   return names;
 }
 
+function actPartyNames() {
+  const names = [];
+  for (const id of ["a-body", "a-subject", "a-appendix", "a-basis"]) {
+    for (const match of document.getElementById(id).value.matchAll(ACT_PARTY)) {
+      const name = match[1].trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+  }
+  return names;
+}
+
+// в списке сначала мы и организации комиссии, ниже — все из прошлых актов
+function actOrgChoices() {
+  const seen = new Set();
+  const commission = [], others = [];
+  const add = (list, org) => {
+    const key = orgKey(org);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    list.push(org.trim());
+  };
+  add(commission, actOrg);
+  actMembers.forEach(m => add(commission, m.org || ""));
+  actPeople.forEach(p => add(others, p.org || ""));
+  return { commission, others };
+}
+
+// передаёт обычно генподрядчик, то есть мы; остальные стороны по очереди
+// разбирают подрядчиков комиссии: [кто повредил] — первый, [чьи работы] — второй
+function guessParties(names, choices) {
+  const contractors = choices.commission.filter(org => orgKey(org) !== actOrgKey);
+  let next = 0;
+  for (const name of names) {
+    if (name in actParties && !actPartyAuto.has(name)) continue;
+    actParties[name] = /переда|генподряд|заказчик/i.test(name)
+      ? actOrg : (contractors[next++] || "");
+    actPartyAuto.add(name);
+  }
+}
+
+function renderParties() {
+  const names = actPartyNames();
+  const box = document.getElementById("a-parties");
+  const shown = names.length > 0;
+  box.style.display = document.getElementById("a-parties-label").style.display =
+    shown ? "" : "none";
+  for (const name of Object.keys(actParties)) {
+    if (!names.includes(name)) { delete actParties[name]; actPartyAuto.delete(name); }
+  }
+  if (!shown) { box.innerHTML = ""; return; }
+
+  const choices = actOrgChoices();
+  guessParties(names, choices);
+  const known = new Set([...choices.commission, ...choices.others].map(orgKey));
+  const options = list => list.map(org =>
+    `<option value="${escapeHtml(org)}">${escapeHtml(org)}</option>`).join("");
+  box.innerHTML = names.map((name, i) => {
+    const value = actParties[name] || "";
+    const manual = value && !known.has(orgKey(value));
+    return `<div class="party" data-i="${i}">
+      <span>${escapeHtml(name)}</span>
+      <div>
+        <select>
+          <option value="">— выберите —</option>
+          <optgroup label="В комиссии">${options(choices.commission)}</optgroup>
+          ${choices.others.length
+            ? `<optgroup label="Из прошлых актов">${options(choices.others)}</optgroup>` : ""}
+          <option value="${ACT_MANUAL}">вписать вручную…</option>
+        </select>
+        <input placeholder="ООО «…»" value="${escapeHtml(manual ? value : "")}"
+               style="${manual ? "" : "display:none"}">
+      </div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".party").forEach(row => {
+    const name = names[Number(row.dataset.i)];
+    const select = row.querySelector("select");
+    const input = row.querySelector("input");
+    const value = actParties[name] || "";
+    select.value = value && !known.has(orgKey(value)) ? ACT_MANUAL
+      : [...select.options].find(o => o.value && orgKey(o.value) === orgKey(value))?.value || "";
+    select.onchange = () => {
+      actPartyAuto.delete(name);
+      const manual = select.value === ACT_MANUAL;
+      input.style.display = manual ? "" : "none";
+      actParties[name] = manual ? input.value.trim() : select.value;
+      if (manual) input.focus();
+    };
+    input.oninput = () => {
+      actPartyAuto.delete(name);
+      actParties[name] = input.value.trim();
+    };
+  });
+}
+
 function actRows() {
   return document.getElementById("a-rows").value.split("\n")
     .filter(line => line.trim())
@@ -1168,6 +1282,7 @@ function actRows() {
 // поля в фигурных скобках — это колонки пакета: пока их нет, таблица
 // строк не нужна и не показывается
 function updateActFields() {
+  renderParties();
   const names = actFieldNames();
   const packed = names.length > 0;
   document.getElementById("a-rows-label").style.display = packed ? "" : "none";
@@ -1223,6 +1338,7 @@ async function buildAct() {
     body: document.getElementById("a-body").value,
     appendix: value("a-appendix"), basis: value("a-basis"),
     subject: value("a-subject"), rows: document.getElementById("a-rows").value,
+    parties: Object.fromEntries(actPartyNames().map(n => [n, actParties[n] || ""])),
   };
   status.textContent = "Собираю…";
   const response = await fetch("/api/act", {
