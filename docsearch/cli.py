@@ -17,7 +17,7 @@ from pathlib import Path
 from . import config as config_mod
 from . import db, extract, homoglyph, letters, meta, morph, ocr
 from . import office, pipeline, scaffold, shell
-from . import sniff, textnorm
+from . import kinds, sniff, textnorm
 from . import search as search_mod
 from . import indexer
 from .indexer import run as run_index
@@ -291,6 +291,25 @@ def cmd_stats(args) -> int:
 
 
 # ------------------------------------------------------------------- problems
+
+def cmd_kinds(args) -> int:
+    """Какие документы лежат в папке — перед тем, как делать шаблоны."""
+    cfg = config_mod.load(args.config)
+    conn = db.connect(cfg.db)
+    try:
+        found, folders, total = kinds.collect(conn, args.folder)
+    finally:
+        conn.close()
+    text = kinds.report(found, folders, total, args.folder, limit=args.limit)
+    if args.out:
+        # в файл — в UTF-8: консоль Windows русский текст при перенаправлении
+        # пишет в своей кодировке, и прочитать его потом негде
+        Path(args.out).write_text(text + "\n", encoding="utf-8")
+        print(f"Успех: отчёт записан в {Path(args.out).resolve()}")
+    else:
+        print(text)
+    return 0 if total else 1
+
 
 def cmd_problems(args) -> int:
     """Что поиск сейчас не видит и почему."""
@@ -868,6 +887,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stats", help="что сейчас в индексе")
     s.set_defaults(func=cmd_stats)
+
+    s = sub.add_parser("kinds",
+                       help="какие документы лежат в папке: виды и образцы")
+    s.add_argument("folder", help="часть названия папки, например Акты")
+    s.add_argument("-n", "--limit", type=int, default=40,
+                   help="сколько видов показать")
+    s.add_argument("-o", "--out", help="записать отчёт в файл")
+    s.set_defaults(func=cmd_kinds)
 
     s = sub.add_parser("problems", help="что поиск не видит и почему")
     s.add_argument("-n", "--limit", type=int, default=15,
