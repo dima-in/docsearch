@@ -24,7 +24,7 @@
     background: var(--panel); border-bottom: 1px solid var(--line);
     padding: 14px 24px; position: sticky; top: 0; z-index: 10;
   }
-  .bar { display: flex; gap: 12px; align-items: center; max-width: 1400px; margin: 0 auto; }
+  .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; max-width: 1400px; margin: 0 auto; }
   .bar h1 { font-size: 17px; margin: 0; white-space: nowrap; font-weight: 600; }
   .bar h1 span { color: var(--muted); font-weight: 400; font-size: 13px; }
   #q {
@@ -156,6 +156,18 @@
     margin: 0; padding: 18px 24px; white-space: pre-wrap; font: 14px/1.6 "Segoe UI", sans-serif;
     overflow-y: auto; max-height: 65vh;
   }
+  /* комиссия: строка на человека — должность, организация, фамилия */
+  .members { grid-column: 1 / -1; display: grid; gap: 6px; }
+  .member { display: grid; grid-template-columns: 1.1fr 1.3fr 0.9fr auto auto; gap: 6px;
+            align-items: center; }
+  .member.absent input:not([type=checkbox]) { color: var(--muted); text-decoration: line-through; }
+  .member label { display: flex; gap: 4px; align-items: center; font-size: 13px;
+                  color: var(--muted); white-space: nowrap; cursor: pointer; }
+  .member button { padding: 4px 8px; }
+  .members-empty { color: var(--muted); font-size: 13px; }
+  .card-form select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px;
+                      font: inherit; width: 100%; background: #fff; }
+  .rows-head { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 </style>
 </head>
 <body>
@@ -170,6 +182,7 @@
     <button id="reset">Сбросить</button>
     <button id="recent">Новые</button>
     <button id="new-letter" class="primary">Новое письмо</button>
+    <button id="new-act" class="primary">Новый акт</button>
     <button id="refresh" title="Обойти папку и добавить появившиеся файлы">Проверить папку</button>
   </div>
   <div class="worker" id="worker" title="Сервер делает это сам, закрывать страницу не нужно"></div>
@@ -237,6 +250,60 @@
     </div>
     <div class="hint">Файл скачивается — в архив ничего не пишется. Правьте в
       Word, сохраняйте в нужную папку, обход подхватит его сам.</div>
+  </div>
+</dialog>
+
+<dialog id="act">
+  <header class="bar">
+    <h1>Новый акт</h1>
+    <button onclick="document.getElementById('act').close()">Закрыть</button>
+  </header>
+  <div class="card-form">
+    <div class="notice" id="act-setup" style="display:none; grid-column: 1 / -1"></div>
+    <label for="a-number">Акт №</label>
+    <span><input id="a-number"><span id="a-number-hint" class="hint-inline"></span></span>
+    <label for="a-date">Дата</label><input id="a-date" type="date">
+
+    <div class="hand-divider">комиссия</div>
+    <label for="a-person">Найти</label>
+    <span class="combo-wrap">
+      <input id="a-person" autocomplete="off" class="search-field"
+             placeholder="фамилия, должность или организация">
+      <ul id="a-combo" class="combo"></ul>
+    </span>
+    <div class="field-note">Ищет по прошлым актам. Наши — вверху. Комиссия
+      сама попадёт и в шапку, и в подписи.</div>
+    <div class="row">
+      <button id="a-last" type="button">Как в прошлом акте</button>
+      <button id="a-add-row" type="button">Добавить строку вручную</button>
+      <button id="a-clear" type="button">Очистить</button>
+    </div>
+    <div class="members" id="a-members"></div>
+
+    <div class="hand-divider">текст акта</div>
+    <label for="a-preset">Заготовка</label><select id="a-preset"></select>
+    <label for="a-body">…в том, что</label>
+    <span>
+      <textarea id="a-body" rows="7" placeholder="произведен осмотр работ…"></textarea>
+      <span class="hint-inline" style="margin-left:0">Слово в фигурных скобках —
+        {шифр} — это поле пакета: на каждую строку таблицы ниже выйдет отдельный акт.</span>
+    </span>
+    <label for="a-rows" id="a-rows-label" style="display:none">Строки пакета</label>
+    <span id="a-rows-box" style="display:none">
+      <div class="rows-head" id="a-rows-head"></div>
+      <textarea id="a-rows" rows="6"
+                placeholder="вставьте строки из Excel или пишите через точку с запятой"></textarea>
+      <span class="hint-inline" id="a-rows-count" style="margin-left:0"></span>
+    </span>
+    <label for="a-appendix">Приложение</label><input id="a-appendix" placeholder="Фото отчёт на 7 листах">
+    <label for="a-basis">Основание</label><input id="a-basis" placeholder="Договор № … от … — если нужно">
+    <label for="a-subject">В имени файла</label><input id="a-subject" placeholder="Демонтаж шпунта — после «Акт № 66»">
+    <div class="row">
+      <button class="primary" id="act-build">Сформировать .docx</button>
+      <span id="act-status"></span>
+    </div>
+    <div class="hint">Файл скачивается — в архив ничего не пишется. Подпишите и
+      положите в папку актов: следующий номер посчитается по ней.</div>
   </div>
 </dialog>
 
@@ -909,6 +976,291 @@ document.getElementById("clear-recipients").onclick = () => {
   chosenRecipients = [];
   renderRecipients();
 };
+
+// --------------------------------------------------------- акты комиссии
+
+let actPeople = [];
+let actMembers = [];
+let actLast = null;
+let actPresets = [];
+let actPresetIndex = 0;
+let actOrgKey = "";
+let actComboIndex = -1;
+// поле пакета — {шифр} в одинарных скобках; {{…}} — разметка шаблона
+const ACT_FIELD = /(?<!\{)\{([^{}\n]{1,40})\}(?!\})/g;
+
+function orgKey(name) {
+  return (name || "").toLowerCase()
+    .replace(/^\s*(ооо|ао|пао|зао|оао|гбу|ип)\s*/, "")
+    .replace(/[^0-9a-zа-яё]+/g, "");
+}
+
+async function openAct() {
+  const draft = await (await fetch("/api/act/draft")).json();
+  document.getElementById("a-number").value = draft.number || "";
+  document.getElementById("a-number-hint").textContent = draft.number_after
+    ? `следующий после № ${draft.number_after} в папке ${draft.folder}` : "";
+  document.getElementById("a-date").value = draft.date || "";
+  actPeople = draft.people || [];
+  actLast = draft.last;
+  actPresets = draft.presets || [];
+  actOrgKey = orgKey(draft.organization);
+
+  const setup = document.getElementById("act-setup");
+  setup.style.display = draft.ready ? "none" : "block";
+  setup.innerHTML = draft.ready ? "" :
+    "Шаблон акта ещё не собран. На сервере выполните<br>" +
+    "<code>.venv\\Scripts\\docsearch.exe -c config.server.yaml act-template " +
+    "\"Акт пустой.doc\"</code><br>и добавьте в конфиг то, что команда напишет.";
+  document.getElementById("act-build").disabled = !draft.ready;
+
+  const last = document.getElementById("a-last");
+  last.textContent = actLast && actLast.number
+    ? `Как в акте № ${actLast.number}` : "Как в прошлом акте";
+  last.disabled = !actLast;
+
+  const select = document.getElementById("a-preset");
+  select.innerHTML = actPresets.map((preset, i) =>
+    `<option value="${i}">${escapeHtml(preset.name)}</option>`).join("");
+  actPresetIndex = 0;
+  for (const id of ["a-person", "a-body", "a-rows", "a-appendix", "a-basis", "a-subject"]) {
+    document.getElementById(id).value = "";
+  }
+  // наши из последнего акта есть почти в каждом — с них и начинаем,
+  // подрядчики меняются от акта к акту
+  actMembers = actLast
+    ? actLast.members.filter(m => orgKey(m.org) === actOrgKey)
+                     .map(m => ({ ...m, absent: false }))
+    : [];
+  renderMembers();
+  updateActFields();
+  document.getElementById("act-status").textContent = "";
+  document.getElementById("act").showModal();
+}
+
+function renderMembers() {
+  const box = document.getElementById("a-members");
+  if (!actMembers.length) {
+    box.innerHTML = '<div class="members-empty">Комиссия пуста — найдите людей ' +
+      "выше или возьмите состав прошлого акта.</div>";
+    return;
+  }
+  box.innerHTML = actMembers.map((m, i) => `
+    <div class="member ${m.absent ? "absent" : ""}" data-i="${i}">
+      <input data-k="position" value="${escapeHtml(m.position || "")}" placeholder="должность">
+      <input data-k="org" value="${escapeHtml(m.org || "")}" placeholder="организация">
+      <input data-k="name" value="${escapeHtml(m.name || "")}" placeholder="Фамилия И.О.">
+      <label title="В акте будет: отсутствовал, акт составлен в одностороннем порядке">
+        <input type="checkbox" data-k="absent" ${m.absent ? "checked" : ""}> не пришёл</label>
+      <span><button type="button" data-up title="выше">↑</button><button
+        type="button" data-drop title="убрать">×</button></span>
+    </div>`).join("");
+  box.querySelectorAll(".member").forEach(row => {
+    const i = Number(row.dataset.i);
+    row.querySelectorAll("input").forEach(input => {
+      input.oninput = input.onchange = () => {
+        const value = input.type === "checkbox" ? input.checked : input.value;
+        actMembers[i][input.dataset.k] = value;
+        if (input.type === "checkbox") row.classList.toggle("absent", value);
+      };
+    });
+    row.querySelector("[data-drop]").onclick = () => {
+      actMembers.splice(i, 1);
+      renderMembers();
+    };
+    row.querySelector("[data-up]").onclick = () => {
+      if (!i) return;
+      [actMembers[i - 1], actMembers[i]] = [actMembers[i], actMembers[i - 1]];
+      renderMembers();
+    };
+  });
+}
+
+function addMember(person) {
+  actMembers.push({ position: person.position || "", org: person.org || "",
+                    name: person.name || "", absent: !!person.absent });
+  renderMembers();
+}
+
+function actMatches() {
+  const query = document.getElementById("a-person").value.trim();
+  const taken = new Set(actMembers.map(m => orgKey(m.org) + "|" + (m.name || "")));
+  return actPeople
+    .filter(p => !taken.has(orgKey(p.org) + "|" + (p.name || "")))
+    .filter(p => !query || matchesQuery(p, query))
+    .slice(0, 12);
+}
+
+function showActCombo() {
+  const box = document.getElementById("a-combo");
+  const matches = actMatches();
+  if (!matches.length) {
+    box.style.display = "none";
+    return;
+  }
+  box.innerHTML = matches.map((p, i) => {
+    const who = p.name || p.position || "представитель";
+    const where = [p.name ? p.position : "", p.org].filter(Boolean).join(", ");
+    return `<li data-i="${i}" class="${i === actComboIndex ? "on" : ""}">
+      <b>${escapeHtml(who)}</b><span>${escapeHtml(where)}</span>
+      <i title="в скольких актах">${p.count}</i></li>`;
+  }).join("");
+  box.style.display = "block";
+  box.querySelectorAll("li").forEach(item => {
+    item.onmousedown = event => {
+      event.preventDefault();          // не терять фокус раньше выбора
+      pickPerson(matches[Number(item.dataset.i)]);
+    };
+  });
+}
+
+function hideActCombo() {
+  document.getElementById("a-combo").style.display = "none";
+  actComboIndex = -1;
+}
+
+function pickPerson(person) {
+  addMember(person);
+  document.getElementById("a-person").value = "";
+  hideActCombo();
+}
+
+function setupActCombo() {
+  const input = document.getElementById("a-person");
+  input.addEventListener("input", () => { actComboIndex = -1; showActCombo(); });
+  input.addEventListener("focus", showActCombo);
+  input.addEventListener("blur", () => setTimeout(hideActCombo, 120));
+  input.addEventListener("keydown", event => {
+    const matches = actMatches();
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      actComboIndex = Math.max(0, Math.min(matches.length - 1, actComboIndex + step));
+      showActCombo();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const chosen = matches[actComboIndex >= 0 ? actComboIndex : 0];
+      if (chosen) pickPerson(chosen);
+    } else if (event.key === "Escape") {
+      hideActCombo();
+    }
+  });
+}
+
+function actFieldNames() {
+  const names = [];
+  for (const id of ["a-body", "a-subject", "a-appendix", "a-basis"]) {
+    for (const match of document.getElementById(id).value.matchAll(ACT_FIELD)) {
+      const name = match[1].trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+  }
+  return names;
+}
+
+function actRows() {
+  return document.getElementById("a-rows").value.split("\n")
+    .filter(line => line.trim())
+    .map(line => (line.includes("\t") ? line.split("\t") : line.split(";"))
+                 .map(cell => cell.trim()));
+}
+
+// поля в фигурных скобках — это колонки пакета: пока их нет, таблица
+// строк не нужна и не показывается
+function updateActFields() {
+  const names = actFieldNames();
+  const packed = names.length > 0;
+  document.getElementById("a-rows-label").style.display = packed ? "" : "none";
+  document.getElementById("a-rows-box").style.display = packed ? "" : "none";
+  document.getElementById("a-rows-head").textContent =
+    "Колонки по порядку: " + names.map(n => `{${n}}`).join(" · ");
+  const rows = packed ? actRows() : [];
+  const start = parseInt(document.getElementById("a-number").value, 10);
+  const count = document.getElementById("a-rows-count");
+  if (!rows.length) {
+    count.textContent = "строка — один акт";
+  } else {
+    const wrong = rows.filter(r => r.length !== names.length).length;
+    count.textContent = `${rows.length} ` + plural(rows.length, "акт", "акта", "актов") +
+      (isNaN(start) ? "" : `: № ${start}–${start + rows.length - 1}`) +
+      (wrong ? ` · в ${wrong} ` + plural(wrong, "строке", "строках", "строках") +
+               " число колонок не совпадает" : "");
+  }
+  document.getElementById("act-build").textContent = rows.length > 1
+    ? `Сформировать ${rows.length} ` + plural(rows.length, "акт", "акта", "актов") + " (.zip)"
+    : "Сформировать .docx";
+}
+
+function choosePreset() {
+  const select = document.getElementById("a-preset");
+  const body = document.getElementById("a-body");
+  const previous = actPresets[actPresetIndex];
+  const touched = body.value.trim() && (!previous || body.value !== previous.text);
+  if (touched && !confirm("Заменить написанный текст заготовкой?")) {
+    select.value = String(actPresetIndex);
+    return;
+  }
+  actPresetIndex = Number(select.value);
+  body.value = (actPresets[actPresetIndex] || {}).text || "";
+  updateActFields();
+  body.focus();
+}
+
+async function buildAct() {
+  const status = document.getElementById("act-status");
+  const members = actMembers.filter(m => (m.org || "").trim() || (m.name || "").trim());
+  if (!members.length) {
+    status.textContent = "Добавьте комиссию";
+    return;
+  }
+  const value = id => document.getElementById(id).value.trim();
+  if (!value("a-body")) {
+    status.textContent = "Напишите, о чём акт";
+    return;
+  }
+  const payload = {
+    number: value("a-number"), date: value("a-date"), members,
+    body: document.getElementById("a-body").value,
+    appendix: value("a-appendix"), basis: value("a-basis"),
+    subject: value("a-subject"), rows: document.getElementById("a-rows").value,
+  };
+  status.textContent = "Собираю…";
+  const response = await fetch("/api/act", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    let message = await response.text();
+    try { message = JSON.parse(message).detail || message; } catch (error) { /* текст как есть */ }
+    status.textContent = "Не удалось: " + String(message).slice(0, 300);
+    return;
+  }
+  const blob = await response.blob();
+  const name = decodeURIComponent(
+    (response.headers.get("Content-Disposition") || "").split("''")[1] || "Акт.docx");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(link.href);
+  status.innerHTML = '<span class="edited">Готово: ' + escapeHtml(name) + "</span>";
+}
+
+document.getElementById("new-act").onclick = openAct;
+document.getElementById("a-preset").onchange = choosePreset;
+document.getElementById("act-build").onclick = buildAct;
+document.getElementById("a-add-row").onclick = () => addMember({});
+document.getElementById("a-clear").onclick = () => { actMembers = []; renderMembers(); };
+document.getElementById("a-last").onclick = () => {
+  if (!actLast) return;
+  actMembers = actLast.members.map(m => ({ ...m }));
+  renderMembers();
+};
+for (const id of ["a-body", "a-subject", "a-appendix", "a-basis", "a-rows", "a-number"]) {
+  document.getElementById(id).addEventListener("input", updateActFields);
+}
+setupActCombo();
 
 document.getElementById("card-save").onclick = saveCard;
 document.getElementById("card-auto").onclick = resetCard;

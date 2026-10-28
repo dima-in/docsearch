@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date
@@ -20,7 +21,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response)
 
-from . import db, indexer, letters, pipeline, worker as worker_mod
+from . import acts, db, indexer, letters, pipeline, worker as worker_mod
 from . import search as search_mod
 from .config import Config
 
@@ -340,6 +341,65 @@ def create_app(cfg: Config) -> FastAPI:
         elif len(files) % 10 in (2, 3, 4) and len(files) % 100 not in (12, 13, 14):
             word = "письма"
         name = f"Рассылка {len(files)} {word} ({first}).zip"
+        return Response(
+            content=letters.pack(files),
+            media_type="application/zip",
+            headers={"Content-Disposition":
+                     f"attachment; filename*=UTF-8''{quote(name)}"},
+        )
+
+    @app.get("/api/act/draft")
+    def api_act_draft() -> JSONResponse:
+        """Заготовка акта: номер по папке, люди и состав прошлого акта."""
+        settings = acts.ActSettings.from_config(cfg)
+        conn = connect()
+        try:
+            people, last = acts.directory(conn, settings.folder,
+                                          settings.organization)
+            number = acts.next_number(conn, settings.folder)
+        finally:
+            conn.close()
+        return JSONResponse({
+            "ready": settings.ready,
+            "template": settings.template,
+            "folder": settings.folder,
+            "number": number,
+            "number_after": number - 1 if number > 1 else None,
+            "date": date.today().isoformat(),
+            "organization": settings.organization,
+            "people": people,
+            "last": last,
+            "presets": settings.presets,
+        })
+
+    @app.post("/api/act")
+    def api_act(act: dict = Body(...)) -> Response:
+        """Собрать акт или пакет актов и отдать на скачивание.
+
+        Как и с письмами, в архив ничего не пишем: акт печатают,
+        подписывают и кладут в папку сами, обход подхватит.
+        """
+        settings = acts.ActSettings.from_config(cfg)
+        if not settings.ready:
+            raise HTTPException(400, "Шаблон акта не настроен: соберите его "
+                                     "командой act-template и укажите в "
+                                     "конфиге acts.template")
+        try:
+            files = acts.build(act, settings)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+        if len(files) == 1:
+            name, blob = files[0]
+            return Response(
+                content=blob,
+                media_type="application/vnd.openxmlformats-officedocument"
+                           ".wordprocessingml.document",
+                headers={"Content-Disposition":
+                         f"attachment; filename*=UTF-8''{quote(name)}"},
+            )
+        numbers = [re.search(r"№ (\d+)", n).group(1) for n, _ in files]
+        name = f"Акты № {numbers[0]}–{numbers[-1]}.zip"
         return Response(
             content=letters.pack(files),
             media_type="application/zip",

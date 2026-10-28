@@ -62,6 +62,13 @@ letterhead:
   number_prefix: ""
   number_folder: ""
   object: ""
+
+# Акты комиссии. Шаблон делается из пустого бланка командой act-template,
+# номер следующего акта берётся из папки folder.
+# acts:
+#   template: 'templates/акт.docx'
+#   folder: "АКТЫ"
+#   organization: ""   # по умолчанию own_organization
 """
 
 

@@ -292,6 +292,64 @@ def cmd_stats(args) -> int:
 
 # ------------------------------------------------------------------- problems
 
+def cmd_act_template(args) -> int:
+    """Шаблон акта из вашего бланка: размечает, что заполняется."""
+    from . import acts
+
+    if args.show:
+        from docx import Document
+
+        found = acts.placeholders(Document(args.source))
+        print("Размечено:", ", ".join(found) if found else "ничего")
+        return 0 if found else 1
+
+    source = Path(args.source)
+    if not source.exists():
+        print(f"Неуспех: нет файла {source}")
+        return 1
+    work = None
+    if source.suffix.lower() == ".doc":
+        # старый формат python-docx не открывает — пересохраняем через Word
+        work = Path(tempfile.mkdtemp(prefix="docsearch-act-"))
+        target = work / "бланк.docx"
+        try:
+            office.check({"word"})
+            result = office.convert_batch(
+                [{"id": 1, "src": str(source.resolve()), "dst": str(target)}], "word")
+        except Exception as exc:
+            print(f"Неуспех: не удалось открыть .doc через Word — {exc}. "
+                  "Пересохраните бланк в .docx и укажите его")
+            shutil.rmtree(work, ignore_errors=True)
+            return 1
+        if not result.get(1, {}).get("ok") or not target.exists():
+            print("Неуспех: Word не пересохранил бланк:",
+                  result.get(1, {}).get("error") or "причина неизвестна")
+            shutil.rmtree(work, ignore_errors=True)
+            return 1
+        source = target
+
+    try:
+        document = acts.make_template(source)
+    except ValueError as exc:
+        print(f"Неуспех: {exc}")
+        return 1
+    finally:
+        # бланк уже прочитан в память — временная копия больше не нужна
+        if work:
+            shutil.rmtree(work, ignore_errors=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    document.save(out)
+    print(f"Успех: шаблон записан в {out.resolve()}")
+    print("Размечено:", ", ".join(acts.placeholders(document)))
+    print()
+    print("Добавьте в конфиг:")
+    print("acts:")
+    print(f"  template: '{out}'")
+    print('  folder: "АКТЫ"          # папка, по которой считаются номера')
+    return 0
+
+
 def cmd_dump(args) -> int:
     """Тексты документов из папки одним файлом — для разбора бланков."""
     cfg = config_mod.load(args.config)
@@ -913,6 +971,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("stats", help="что сейчас в индексе")
     s.set_defaults(func=cmd_stats)
+
+    s = sub.add_parser("act-template",
+                       help="шаблон акта из вашего бланка")
+    s.add_argument("source", help="бланк акта, .doc или .docx")
+    s.add_argument("-o", "--out", default="templates/акт.docx",
+                   help="куда записать шаблон")
+    s.add_argument("--show", action="store_true",
+                   help="показать разметку готового шаблона")
+    s.set_defaults(func=cmd_act_template)
 
     s = sub.add_parser("dump",
                        help="тексты документов из папки одним файлом")
