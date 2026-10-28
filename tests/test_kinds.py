@@ -75,3 +75,36 @@ def test_report_groups_a_folder(tmp_path: Path):
 def test_missing_folder_says_so(tmp_path: Path):
     out = kinds.report([], {}, 0, "Актыы")
     assert out.startswith("Неуспех")
+
+
+def test_place_and_date_line_is_not_the_subject():
+    """Под «АКТ №» в бланке стоит «г. Москва» и дата — это не вид акта.
+    На реальном архиве так в одну кучу ушли 163 разных акта."""
+    body = text("АКТ № 46", "г. Москва                    «12» мая 2025 г.",
+                "передачи строительной площадки", "Мы, нижеподписавшиеся")
+    assert kinds.title_from_text(body) == "акт передачи строительной площадки"
+
+
+def test_blank_date_in_template():
+    body = text("АКТ № ___", "г. Москва «__» мая 2025 г.", "об устранении замечаний")
+    assert kinds.title_from_text(body) == "акт об устранении замечаний"
+
+
+def test_item_number_before_heading():
+    body = text("(16.3) Акт приемки АИИСКУЭ", "Заключение: вышеуказанное "
+                "оборудование смонтировано в соответствии с проектом")
+    assert kinds.title_from_text(body) == "акт приемки аиискуэ"
+
+
+def test_act_wins_over_its_own_conclusion():
+    body = text("Заключение: оборудование смонтировано", "Акт приемки фасада")
+    assert kinds.title_from_text(body) == "акт приемки фасада"
+
+
+def test_certificate_number_leaves_no_crumbs():
+    title = kinds.title_from_text(
+        "Сертификат соответствия №РОСС RU.32437.04ЛБК0.ОС04.00469 от 30.09.2024")
+    assert title == "сертификат соответствия"
+    # и когда текста нет — то же по имени файла
+    assert kinds.title_from_name("Сертификат соответствия №РОСС "
+                                 "RU.32437.04ЛБК0.ОС04.00469 от 30.09.2024.pdf")         == "сертификат соответствия"

@@ -21,16 +21,28 @@ from pathlib import PurePath
 # с чего начинается заголовок документа
 HEADS = ("акт", "протокол", "реестр", "опись", "ведомость", "справка",
          "журнал", "заключение", "предписание", "уведомление", "приказ",
-         "перечень", "спецификация", "накладная", "схема", "заявка")
+         "перечень", "спецификация", "накладная", "схема", "заявка",
+         "сертификат", "паспорт", "декларация")
 
-HEAD_LINE = re.compile(r"^\s*(" + "|".join(HEADS) + r")\b", re.IGNORECASE)
-# хвост заголовка, который у каждого документа свой
-NUMBER = re.compile(r"(№|n[o°]?\.?)\s*[\w\-/.]*", re.IGNORECASE)
+# перед заголовком бывает номер пункта: «(16.3) Акт приёмки…»
+HEAD_LINE = re.compile(r"^\s*(\(?[\d.]+\)?\.?\s*)?(" + "|".join(HEADS) + r")\b",
+                       re.IGNORECASE)
+# хвост заголовка, который у каждого документа свой. Латинское N — только
+# перед цифрой, иначе съедается любая латиница
+# «№РОСС RU.32437.04ЛБК0.ОС04.00469» — номер в несколько слов: берём
+# следом все слова, где есть цифра
+NUMBER = re.compile(r"(№|\bN[o°]?\.?(?=\s*\d))\s*\S*(?:\s+(?=\S*\d)\S+)*",
+                    re.IGNORECASE)
+# строка под заголовком «г. Москва  «12» мая 2025 г.» — место и дата,
+# а не предмет акта
+PLACE = re.compile(r"^(г\.|г\s|город\b|москва\b)", re.IGNORECASE)
 DATE = re.compile(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b")
 YEAR = re.compile(r"\b(19|20)\d{2}\s*(г\.?|года)?")
 MONTHS = ("января|февраля|марта|апреля|мая|июня|июля|августа|сентября|"
           "октября|ноября|декабря")
-WORD_DATE = re.compile(r"«?\s*\d{1,2}\s*»?\s*(" + MONTHS + r")", re.IGNORECASE)
+# «12» мая, и «__» мая в незаполненном бланке
+WORD_DATE = re.compile(r"«?\s*[\d_]{0,2}\s*»?\s*\b(" + MONTHS + r")\b",
+                       re.IGNORECASE)
 DIGITS = re.compile(r"\d+")
 JUNK = re.compile(r"[«»\"'“”„()\[\]_]+")
 SPACES = re.compile(r"\s+")
@@ -72,6 +84,9 @@ def _clean(text: str) -> str:
     text = DIGITS.sub(" ", JUNK.sub(" ", text))
     text = SPACES.sub(" ", text).strip(" .,:;-–—")
     # «акт от» после вырезанной даты
+    # точки и дефисы, оставшиеся от вырезанных номеров: «ru. . лбк .ос .»
+    text = re.sub(r"(?<=\s)[.\-/,]+(?=\s|$)", " ", text)
+    text = SPACES.sub(" ", text).strip(" .,:;-–—")
     text = re.sub(r"\s+(от|г)$", "", text)
     return text.lower()
 
@@ -80,14 +95,22 @@ def title_from_text(text: str) -> str | None:
     """Вид документа по его заголовку.
 
     Заголовок часто разбит на строки: «АКТ» на одной, «приёма-передачи
-    документации» на следующей. Короткую строку склеиваем со следующей.
+    документации» на следующей. Короткую строку склеиваем со следующей,
+    пропуская место и дату. Акт ищем в первую очередь: «Заключение:»
+    внизу акта приёмки — не заголовок документа, а его раздел.
     """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    for i, line in enumerate(lines[:LOOK_LINES]):
-        if not HEAD_LINE.match(line):
-            continue
-        title = line
-        rest = lines[i + 1:i + 3]
+    head = lines[:LOOK_LINES]
+    matches = [(i, m.group(2).lower()) for i, line in enumerate(head)
+               if (m := HEAD_LINE.match(line))]
+    order = [i for i, word in matches if word == "акт"] + \
+            [i for i, word in matches if word != "акт"]
+    for i in order:
+        title = HEAD_LINE.sub(lambda m: m.group(2), lines[i], count=1)
+        # «Заключение: вышеуказанное оборудование…» — дальше уже текст
+        title = title.split(":")[0]
+        rest = [line for line in lines[i + 1:i + 5]
+                if _clean(line) and not PLACE.match(_clean(line))][:2]
         # «АКТ №» или «АКТ» — продолжение на следующей строке
         while rest and len(_clean(title).split()) < 3:
             title = f"{title} {rest.pop(0)}"
